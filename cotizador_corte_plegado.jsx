@@ -1062,6 +1062,404 @@ function btnStyle({ active, variant = "default", small } = {}) {
 /* =========================================================================
    COMPONENTE PRINCIPAL
    ========================================================================= */
+/* ---------- vista previa de la pieza (rectángulo o perfil plegado) ---------- */
+function PiezaPreview({ item, viewMode, setViewMode, geom, roundedPts }) {
+  const W = 420,
+    H = 320;
+  if (item.plegadoActivo) {
+    const box = bbox(geom.pts);
+    const w = Math.max(box.maxX - box.minX, 1);
+    const h = Math.max(box.maxY - box.minY, 1);
+    const diag = Math.sqrt(w * w + h * h);
+    const pad = Math.max(diag * 0.28, 20);
+    const viewBox = `${box.minX - pad} ${box.minY - pad} ${w + 2 * pad} ${h + 2 * pad}`;
+    const svgPts = geom.pts.map((p) => ({ x: p.x, y: -p.y }));
+    const roundedSvgPts = roundedPts.map((p) => ({ x: p.x, y: -p.y }));
+    const polylineStr = roundedSvgPts.map((p) => `${p.x},${p.y}`).join(" ");
+    const fontSize = Math.max(diag * 0.045, 4);
+    const labelOffset = Math.max(diag * 0.1, 7);
+    return (
+      <div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+          {[
+            ["2d", "Vista 2D"],
+            ["3d", "Vista 3D"],
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setViewMode(key)}
+              style={btnStyle({ active: viewMode === key, small: true })}
+            >
+              {label}
+            </button>
+          ))}
+          {viewMode === "3d" && (
+            <div style={{ marginLeft: "auto", fontSize: 10.5, color: TEXT_DIM, alignSelf: "center" }}>
+              arrastrá para rotar · rueda para zoom
+            </div>
+          )}
+        </div>
+
+        {viewMode === "3d" ? (
+          <ThreeDProfile pts={roundedPts} depth={parseFloat(item.profundidad) || 0} />
+        ) : (
+          <svg viewBox={viewBox} width="100%" height={H} style={{ overflow: "visible" }}>
+            <polyline
+              points={polylineStr}
+              fill="none"
+              stroke={CYAN}
+              strokeWidth={Math.max(diag * 0.014, 0.9)}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+            />
+            {svgPts.map((p, i) => (
+              <circle key={i} cx={p.x} cy={p.y} r={Math.max(diag * 0.014, 1.2)} fill={TEXT} />
+            ))}
+            {item.segments.map((seg, i) => {
+              const p1 = svgPts[i];
+              const p2 = svgPts[i + 1];
+              const mx = (p1.x + p2.x) / 2;
+              const my = (p1.y + p2.y) / 2;
+              const dx = p2.x - p1.x;
+              const dy = p2.y - p1.y;
+              const len = Math.hypot(dx, dy) || 1;
+              const nx = -dy / len;
+              const ny = dx / len;
+              return (
+                <text
+                  key={i}
+                  x={mx + nx * labelOffset}
+                  y={my + ny * labelOffset}
+                  fontSize={fontSize}
+                  fill="#c9e3ee"
+                  fontFamily={MONO}
+                  textAnchor="middle"
+                >
+                  {parseFloat(seg.length || 0).toFixed(0)} mm
+                </text>
+              );
+            })}
+          </svg>
+        )}
+      </div>
+    );
+  }
+  if (item.dxfShape) {
+    return (
+      <div style={{ display: "flex", justifyContent: "center" }}>
+        <DxfShapeSvg shape={item.dxfShape} size={H} dashed strokeWidth={1.6} />
+      </div>
+    );
+  }
+  // rectángulo simple
+  const ancho = parseFloat(item.anchoManual) || 1;
+  const largo = parseFloat(item.largoManual) || 1;
+  const pad = 40;
+  const scale = Math.min((W - pad * 2) / ancho, (H - pad * 2 - 30) / largo);
+  const drawW = ancho * scale;
+  const drawH = largo * scale;
+  const ox = (W - drawW) / 2;
+  const oy = 20;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H}>
+      <rect
+        x={ox}
+        y={oy}
+        width={drawW}
+        height={drawH}
+        fill={CYAN}
+        fillOpacity={0.12}
+        stroke={CYAN}
+        strokeWidth={2}
+      />
+      <text
+        x={ox + drawW / 2}
+        y={oy + drawH + 22}
+        textAnchor="middle"
+        fontSize={13}
+        fill={TEXT_MUT}
+        fontFamily={MONO}
+      >
+        {fmt(ancho, 0)} mm
+      </text>
+      <text
+        x={ox - 14}
+        y={oy + drawH / 2}
+        textAnchor="middle"
+        fontSize={13}
+        fill={TEXT_MUT}
+        fontFamily={MONO}
+        transform={`rotate(-90 ${ox - 14} ${oy + drawH / 2})`}
+      >
+        {fmt(largo, 0)} mm
+      </text>
+    </svg>
+  );
+}
+
+/* ---------- vista de nesting en chapa ---------- */
+function NestingPreview({ sheet, margen, gap, grupoNesting, chapaIdx }) {
+  const W = 900,
+    H = 460;
+  const pad = 50;
+  const scale = Math.min(
+    (W - pad * 2) / Math.max(sheet.largo, 1),
+    (H - pad * 2) / Math.max(sheet.ancho, 1)
+  );
+  const drawW = sheet.largo * scale;
+  const drawH = sheet.ancho * scale;
+  const ox = (W - drawW) / 2;
+  const oy = 20;
+  const rects = [];
+  (grupoNesting.placementsPerSheet[chapaIdx] || []).forEach((pl, plIdx) => {
+    let dibujadas = 0;
+    outer: for (let r = 0; r < pl.ny; r++) {
+      for (let c = 0; c < pl.nx; c++) {
+        if (dibujadas >= pl.count) break outer;
+        const px = margen + pl.x + c * (pl.pw + gap);
+        const py = margen + pl.y + r * (pl.ph + gap);
+        rects.push(
+          <rect
+            key={`${plIdx}-${r}-${c}`}
+            x={ox + px * scale}
+            y={oy + py * scale}
+            width={pl.pw * scale}
+            height={pl.ph * scale}
+            fill={pl.color}
+            fillOpacity={0.28}
+            stroke={pl.color}
+            strokeWidth={1.2}
+          />
+        );
+        dibujadas++;
+      }
+    }
+  });
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H}>
+      <rect
+        x={ox}
+        y={oy}
+        width={drawW}
+        height={drawH}
+        fill="#8fa4b8"
+        fillOpacity={0.08}
+        stroke="#8fa4b8"
+        strokeWidth={2}
+      />
+      {rects}
+      <text
+        x={ox + drawW / 2}
+        y={oy + drawH + 26}
+        textAnchor="middle"
+        fontSize={13}
+        fill={TEXT_MUT}
+        fontFamily={MONO}
+      >
+        {fmt(sheet.largo, 0)} mm
+      </text>
+      <text
+        x={ox - 16}
+        y={oy + drawH / 2}
+        textAnchor="middle"
+        fontSize={13}
+        fill={TEXT_MUT}
+        fontFamily={MONO}
+        transform={`rotate(-90 ${ox - 16} ${oy + drawH / 2})`}
+      >
+        {fmt(sheet.ancho, 0)} mm
+      </text>
+    </svg>
+
+  );
+}
+
+/* ---------- ventana modal para definir la pieza (medidas o DXF) + cantidad ---------- */
+function PiezaModal({ open, onClose, item, tab, setTab, updateItem, quitarDxf, handleDxfUpload }) {
+  if (!open) return null;
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(5,12,20,0.72)",
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          ...st.panel,
+          width: "100%",
+          maxWidth: 480,
+          maxHeight: "90vh",
+          overflowY: "auto",
+          boxSizing: "border-box",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 10 }}>
+          <div style={st.eyebrow}>Definir pieza — {item.nombre}</div>
+          <button
+            onClick={onClose}
+            title="Cerrar"
+            style={{ background: "transparent", border: "none", color: TEXT_MUT, cursor: "pointer", padding: 4 }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+          <button
+            onClick={() => setTab("manual")}
+            style={btnStyle({ active: tab === "manual" })}
+          >
+            Medidas manuales
+          </button>
+          <button
+            onClick={() => setTab("dxf")}
+            style={btnStyle({ active: tab === "dxf" })}
+          >
+            Subir plano (DXF)
+          </button>
+        </div>
+
+        {tab === "manual" ? (
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 10, marginBottom: 16 }}>
+            <div>
+              <label style={st.label}>Ancho de pieza (mm)</label>
+              <input
+                type="number"
+                style={st.input}
+                value={item.anchoManual}
+                onChange={(e) => {
+                  if (item.dxfShape) quitarDxf(item.id);
+                  updateItem(item.id, { anchoManual: e.target.value });
+                }}
+              />
+            </div>
+            <div>
+              <label style={st.label}>Largo de pieza (mm)</label>
+              <input
+                type="number"
+                style={st.input}
+                value={item.largoManual}
+                onChange={(e) => {
+                  if (item.dxfShape) quitarDxf(item.id);
+                  updateItem(item.id, { largoManual: e.target.value });
+                }}
+              />
+            </div>
+            {item.dxfShape && (
+              <div style={{ gridColumn: "1 / -1", fontSize: 10.5, color: TEXT_DIM }}>
+                Ya hay un plano cargado para este ítem — si tocás las medidas manuales, se
+                quita el plano y pasa a usarse el rectángulo que cargues acá.
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ marginBottom: 16 }}>
+            {item.dxfShape ? (
+              <div
+                style={{
+                  display: "flex",
+                  gap: 14,
+                  alignItems: "center",
+                  background: PANEL2,
+                  border: `1px solid ${BORDER}`,
+                  borderRadius: 8,
+                  padding: "12px 14px",
+                  flexWrap: "wrap",
+                }}
+              >
+                <DxfShapeSvg shape={item.dxfShape} size={84} />
+                <div style={{ flex: "1 1 140px" }}>
+                  <div style={{ fontSize: 13, color: TEXT, fontWeight: 600 }}>{item.dxfFileName}</div>
+                  <div style={{ fontSize: 12, color: TEXT_MUT, fontFamily: MONO, marginTop: 2 }}>
+                    {fmt(item.dxfShape.width, 1)} × {fmt(item.dxfShape.height, 1)} mm
+                  </div>
+                </div>
+                <button
+                  onClick={() => quitarDxf(item.id)}
+                  style={btnStyle({ variant: "danger", small: true })}
+                >
+                  <X size={13} /> Quitar
+                </button>
+              </div>
+            ) : (
+              <div>
+                <label
+                  style={{
+                    ...btnStyle({ variant: "primary" }),
+                    display: "inline-flex",
+                    cursor: "pointer",
+                  }}
+                >
+                  <Layers size={14} /> Elegir archivo DXF
+                  <input
+                    type="file"
+                    accept=".dxf"
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      handleDxfUpload(item.id, e.target.files?.[0]);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                {item.dxfError && (
+                  <div style={{ fontSize: 10.5, color: RED, marginTop: 8 }}>{item.dxfError}</div>
+                )}
+                <div style={{ fontSize: 10.5, color: TEXT_DIM, marginTop: 10 }}>
+                  Leemos líneas, arcos, círculos y curvas del plano para calcular el ancho y
+                  largo reales de la pieza automáticamente — no hace falta cargarlos a mano.
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: ORANGE,
+                    background: "rgba(232,135,30,.1)",
+                    border: "1px solid rgba(232,135,30,.35)",
+                    padding: "8px 10px",
+                    borderRadius: 6,
+                    marginTop: 10,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  Requisitos del archivo: escala 1:1 (1 unidad del dibujo = 1 mm real), formato
+                  DXF, con todo el contorno de la pieza dibujado en la capa "0" — sin
+                  acotaciones, textos, rótulos ni otras anotaciones, solo la geometría de corte.
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={{ marginBottom: 20 }}>
+          <label style={st.label}>Cantidad de piezas</label>
+          <input
+            type="number"
+            style={{ ...st.input, maxWidth: 140 }}
+            value={item.cantidad}
+            onChange={(e) => updateItem(item.id, { cantidad: e.target.value })}
+          />
+        </div>
+
+        <button
+          onClick={onClose}
+          style={{ ...btnStyle({ variant: "primary" }), width: "100%", justifyContent: "center", fontWeight: 600 }}
+        >
+          Listo
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [items, setItems] = useState([crearItem(1)]);
   const [activeId, setActiveId] = useState(items[0].id);
@@ -1441,406 +1839,6 @@ export default function App() {
     doc.save(`cotizacion_${new Date().toISOString().slice(0, 10)}.pdf`);
   }
 
-  /* ---------- vista previa de la pieza (rectángulo o perfil plegado) ---------- */
-  function PiezaPreview() {
-    const W = 420,
-      H = 320;
-    if (activeItem.plegadoActivo) {
-      const box = bbox(geom.pts);
-      const w = Math.max(box.maxX - box.minX, 1);
-      const h = Math.max(box.maxY - box.minY, 1);
-      const diag = Math.sqrt(w * w + h * h);
-      const pad = Math.max(diag * 0.28, 20);
-      const viewBox = `${box.minX - pad} ${box.minY - pad} ${w + 2 * pad} ${h + 2 * pad}`;
-      const svgPts = geom.pts.map((p) => ({ x: p.x, y: -p.y }));
-      const roundedSvgPts = roundedPts.map((p) => ({ x: p.x, y: -p.y }));
-      const polylineStr = roundedSvgPts.map((p) => `${p.x},${p.y}`).join(" ");
-      const fontSize = Math.max(diag * 0.045, 4);
-      const labelOffset = Math.max(diag * 0.1, 7);
-      return (
-        <div>
-          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-            {[
-              ["2d", "Vista 2D"],
-              ["3d", "Vista 3D"],
-            ].map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setViewMode(key)}
-                style={btnStyle({ active: viewMode === key, small: true })}
-              >
-                {label}
-              </button>
-            ))}
-            {viewMode === "3d" && (
-              <div style={{ marginLeft: "auto", fontSize: 10.5, color: TEXT_DIM, alignSelf: "center" }}>
-                arrastrá para rotar · rueda para zoom
-              </div>
-            )}
-          </div>
-
-          {viewMode === "3d" ? (
-            <ThreeDProfile pts={roundedPts} depth={parseFloat(activeItem.profundidad) || 0} />
-          ) : (
-            <svg viewBox={viewBox} width="100%" height={H} style={{ overflow: "visible" }}>
-              <polyline
-                points={polylineStr}
-                fill="none"
-                stroke={CYAN}
-                strokeWidth={Math.max(diag * 0.014, 0.9)}
-                strokeLinejoin="round"
-                strokeLinecap="round"
-              />
-              {svgPts.map((p, i) => (
-                <circle key={i} cx={p.x} cy={p.y} r={Math.max(diag * 0.014, 1.2)} fill={TEXT} />
-              ))}
-              {activeItem.segments.map((seg, i) => {
-                const p1 = svgPts[i];
-                const p2 = svgPts[i + 1];
-                const mx = (p1.x + p2.x) / 2;
-                const my = (p1.y + p2.y) / 2;
-                const dx = p2.x - p1.x;
-                const dy = p2.y - p1.y;
-                const len = Math.hypot(dx, dy) || 1;
-                const nx = -dy / len;
-                const ny = dx / len;
-                return (
-                  <text
-                    key={i}
-                    x={mx + nx * labelOffset}
-                    y={my + ny * labelOffset}
-                    fontSize={fontSize}
-                    fill="#c9e3ee"
-                    fontFamily={MONO}
-                    textAnchor="middle"
-                  >
-                    {parseFloat(seg.length || 0).toFixed(0)} mm
-                  </text>
-                );
-              })}
-            </svg>
-          )}
-        </div>
-      );
-    }
-    if (activeItem.dxfShape) {
-      return (
-        <div style={{ display: "flex", justifyContent: "center" }}>
-          <DxfShapeSvg shape={activeItem.dxfShape} size={H} dashed strokeWidth={1.6} />
-        </div>
-      );
-    }
-    // rectángulo simple
-    const ancho = parseFloat(activeItem.anchoManual) || 1;
-    const largo = parseFloat(activeItem.largoManual) || 1;
-    const pad = 40;
-    const scale = Math.min((W - pad * 2) / ancho, (H - pad * 2 - 30) / largo);
-    const drawW = ancho * scale;
-    const drawH = largo * scale;
-    const ox = (W - drawW) / 2;
-    const oy = 20;
-    return (
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H}>
-        <rect
-          x={ox}
-          y={oy}
-          width={drawW}
-          height={drawH}
-          fill={CYAN}
-          fillOpacity={0.12}
-          stroke={CYAN}
-          strokeWidth={2}
-        />
-        <text
-          x={ox + drawW / 2}
-          y={oy + drawH + 22}
-          textAnchor="middle"
-          fontSize={13}
-          fill={TEXT_MUT}
-          fontFamily={MONO}
-        >
-          {fmt(ancho, 0)} mm
-        </text>
-        <text
-          x={ox - 14}
-          y={oy + drawH / 2}
-          textAnchor="middle"
-          fontSize={13}
-          fill={TEXT_MUT}
-          fontFamily={MONO}
-          transform={`rotate(-90 ${ox - 14} ${oy + drawH / 2})`}
-        >
-          {fmt(largo, 0)} mm
-        </text>
-      </svg>
-    );
-  }
-
-  /* ---------- vista de nesting en chapa ---------- */
-  function NestingPreview() {
-    const W = 900,
-      H = 460;
-    const sheet = sheetActiva;
-    const pad = 50;
-    const scale = Math.min(
-      (W - pad * 2) / Math.max(sheet.largo, 1),
-      (H - pad * 2) / Math.max(sheet.ancho, 1)
-    );
-    const drawW = sheet.largo * scale;
-    const drawH = sheet.ancho * scale;
-    const ox = (W - drawW) / 2;
-    const oy = 20;
-    const margen = margenActivo;
-    const gap = gapActivo;
-    const rects = [];
-    (grupoNesting.placementsPerSheet[chapaIdx] || []).forEach((pl, plIdx) => {
-      let dibujadas = 0;
-      outer: for (let r = 0; r < pl.ny; r++) {
-        for (let c = 0; c < pl.nx; c++) {
-          if (dibujadas >= pl.count) break outer;
-          const px = margen + pl.x + c * (pl.pw + gap);
-          const py = margen + pl.y + r * (pl.ph + gap);
-          rects.push(
-            <rect
-              key={`${plIdx}-${r}-${c}`}
-              x={ox + px * scale}
-              y={oy + py * scale}
-              width={pl.pw * scale}
-              height={pl.ph * scale}
-              fill={pl.color}
-              fillOpacity={0.28}
-              stroke={pl.color}
-              strokeWidth={1.2}
-            />
-          );
-          dibujadas++;
-        }
-      }
-    });
-
-    return (
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H}>
-        <rect
-          x={ox}
-          y={oy}
-          width={drawW}
-          height={drawH}
-          fill="#8fa4b8"
-          fillOpacity={0.08}
-          stroke="#8fa4b8"
-          strokeWidth={2}
-        />
-        {rects}
-        <text
-          x={ox + drawW / 2}
-          y={oy + drawH + 26}
-          textAnchor="middle"
-          fontSize={13}
-          fill={TEXT_MUT}
-          fontFamily={MONO}
-        >
-          {fmt(sheet.largo, 0)} mm
-        </text>
-        <text
-          x={ox - 16}
-          y={oy + drawH / 2}
-          textAnchor="middle"
-          fontSize={13}
-          fill={TEXT_MUT}
-          fontFamily={MONO}
-          transform={`rotate(-90 ${ox - 16} ${oy + drawH / 2})`}
-        >
-          {fmt(sheet.ancho, 0)} mm
-        </text>
-      </svg>
-
-    );
-  }
-
-  /* ---------- ventana modal para definir la pieza (medidas o DXF) + cantidad ---------- */
-  function PiezaModal() {
-    if (!pieceModalOpen) return null;
-    return (
-      <div
-        onClick={() => setPieceModalOpen(false)}
-        style={{
-          position: "fixed",
-          inset: 0,
-          background: "rgba(5,12,20,0.72)",
-          zIndex: 1000,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 20,
-        }}
-      >
-        <div
-          onClick={(e) => e.stopPropagation()}
-          style={{
-            ...st.panel,
-            width: "100%",
-            maxWidth: 480,
-            maxHeight: "90vh",
-            overflowY: "auto",
-            boxSizing: "border-box",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 10 }}>
-            <div style={st.eyebrow}>Definir pieza — {activeItem.nombre}</div>
-            <button
-              onClick={() => setPieceModalOpen(false)}
-              title="Cerrar"
-              style={{ background: "transparent", border: "none", color: TEXT_MUT, cursor: "pointer", padding: 4 }}
-            >
-              <X size={18} />
-            </button>
-          </div>
-
-          <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-            <button
-              onClick={() => setPieceModalTab("manual")}
-              style={btnStyle({ active: pieceModalTab === "manual" })}
-            >
-              Medidas manuales
-            </button>
-            <button
-              onClick={() => setPieceModalTab("dxf")}
-              style={btnStyle({ active: pieceModalTab === "dxf" })}
-            >
-              Subir plano (DXF)
-            </button>
-          </div>
-
-          {pieceModalTab === "manual" ? (
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 10, marginBottom: 16 }}>
-              <div>
-                <label style={st.label}>Ancho de pieza (mm)</label>
-                <input
-                  type="number"
-                  style={st.input}
-                  value={activeItem.anchoManual}
-                  onChange={(e) => {
-                    if (activeItem.dxfShape) quitarDxf(activeItem.id);
-                    updateItem(activeItem.id, { anchoManual: e.target.value });
-                  }}
-                />
-              </div>
-              <div>
-                <label style={st.label}>Largo de pieza (mm)</label>
-                <input
-                  type="number"
-                  style={st.input}
-                  value={activeItem.largoManual}
-                  onChange={(e) => {
-                    if (activeItem.dxfShape) quitarDxf(activeItem.id);
-                    updateItem(activeItem.id, { largoManual: e.target.value });
-                  }}
-                />
-              </div>
-              {activeItem.dxfShape && (
-                <div style={{ gridColumn: "1 / -1", fontSize: 10.5, color: TEXT_DIM }}>
-                  Ya hay un plano cargado para este ítem — si tocás las medidas manuales, se
-                  quita el plano y pasa a usarse el rectángulo que cargues acá.
-                </div>
-              )}
-            </div>
-          ) : (
-            <div style={{ marginBottom: 16 }}>
-              {activeItem.dxfShape ? (
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 14,
-                    alignItems: "center",
-                    background: PANEL2,
-                    border: `1px solid ${BORDER}`,
-                    borderRadius: 8,
-                    padding: "12px 14px",
-                    flexWrap: "wrap",
-                  }}
-                >
-                  <DxfShapeSvg shape={activeItem.dxfShape} size={84} />
-                  <div style={{ flex: "1 1 140px" }}>
-                    <div style={{ fontSize: 13, color: TEXT, fontWeight: 600 }}>{activeItem.dxfFileName}</div>
-                    <div style={{ fontSize: 12, color: TEXT_MUT, fontFamily: MONO, marginTop: 2 }}>
-                      {fmt(activeItem.dxfShape.width, 1)} × {fmt(activeItem.dxfShape.height, 1)} mm
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => quitarDxf(activeItem.id)}
-                    style={btnStyle({ variant: "danger", small: true })}
-                  >
-                    <X size={13} /> Quitar
-                  </button>
-                </div>
-              ) : (
-                <div>
-                  <label
-                    style={{
-                      ...btnStyle({ variant: "primary" }),
-                      display: "inline-flex",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <Layers size={14} /> Elegir archivo DXF
-                    <input
-                      type="file"
-                      accept=".dxf"
-                      style={{ display: "none" }}
-                      onChange={(e) => {
-                        handleDxfUpload(activeItem.id, e.target.files?.[0]);
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
-                  {activeItem.dxfError && (
-                    <div style={{ fontSize: 10.5, color: RED, marginTop: 8 }}>{activeItem.dxfError}</div>
-                  )}
-                  <div style={{ fontSize: 10.5, color: TEXT_DIM, marginTop: 10 }}>
-                    Leemos líneas, arcos, círculos y curvas del plano para calcular el ancho y
-                    largo reales de la pieza automáticamente — no hace falta cargarlos a mano.
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: ORANGE,
-                      background: "rgba(232,135,30,.1)",
-                      border: "1px solid rgba(232,135,30,.35)",
-                      padding: "8px 10px",
-                      borderRadius: 6,
-                      marginTop: 10,
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    Requisitos del archivo: escala 1:1 (1 unidad del dibujo = 1 mm real), formato
-                    DXF, con todo el contorno de la pieza dibujado en la capa "0" — sin
-                    acotaciones, textos, rótulos ni otras anotaciones, solo la geometría de corte.
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          <div style={{ marginBottom: 20 }}>
-            <label style={st.label}>Cantidad de piezas</label>
-            <input
-              type="number"
-              style={{ ...st.input, maxWidth: 140 }}
-              value={activeItem.cantidad}
-              onChange={(e) => updateItem(activeItem.id, { cantidad: e.target.value })}
-            />
-          </div>
-
-          <button
-            onClick={() => setPieceModalOpen(false)}
-            style={{ ...btnStyle({ variant: "primary" }), width: "100%", justifyContent: "center", fontWeight: 600 }}
-          >
-            Listo
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   /* ---------------------------- RENDER ---------------------------- */
   return (
@@ -1854,7 +1852,16 @@ export default function App() {
         boxSizing: "border-box",
       }}
     >
-      <PiezaModal />
+      <PiezaModal
+        open={pieceModalOpen}
+        onClose={() => setPieceModalOpen(false)}
+        item={activeItem}
+        tab={pieceModalTab}
+        setTab={setPieceModalTab}
+        updateItem={updateItem}
+        quitarDxf={quitarDxf}
+        handleDxfUpload={handleDxfUpload}
+      />
       <div style={st.eyebrow}>Módulo · Cotizador online</div>
       <h1 style={{ fontSize: 21, margin: "4px 0 4px", fontWeight: 600 }}>
         Corte láser y plegado de chapa
@@ -2174,7 +2181,13 @@ export default function App() {
         {/* Panel de vista previa + métricas */}
         <div style={{ ...st.panel, flex: "1 1 380px", minWidth: "min(320px, 100%)" }}>
           <div style={{ ...st.eyebrow, marginBottom: 10 }}>Vista previa de pieza</div>
-          <PiezaPreview />
+          <PiezaPreview
+            item={activeItem}
+            viewMode={viewMode}
+            setViewMode={setViewMode}
+            geom={geom}
+            roundedPts={roundedPts}
+          />
           <div
             style={{
               display: "grid",
@@ -2334,7 +2347,13 @@ export default function App() {
           </div>
         )}
 
-        <NestingPreview />
+        <NestingPreview
+          sheet={sheetActiva}
+          margen={margenActivo}
+          gap={gapActivo}
+          grupoNesting={grupoNesting}
+          chapaIdx={chapaIdx}
+        />
         <div style={{ fontSize: 10.5, color: TEXT_DIM, marginTop: 8 }}>
           {grupoNesting.sheetsUsed > 1
             ? "Elegí abajo qué chapa del grupo querés ver — cada una tiene su propio aprovechamiento."
