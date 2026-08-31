@@ -514,6 +514,77 @@ function DxfShapeSvg({ shape, size, strokeWidth, dashed = true }) {
   );
 }
 
+// Versión en SVG (string) de la miniatura de pieza, pensada para rasterizar
+// e incrustar en el PDF — misma geometría que ItemThumb pero sobre fondo
+// blanco y con el color propio del ítem, en vez de los tonos del tema oscuro.
+function itemThumbSvgMarkup(item, size, color) {
+  if (item.dxfShape) {
+    const s = item.dxfShape;
+    const w = Math.max(s.width, 1);
+    const h = Math.max(s.height, 1);
+    const diag = Math.sqrt(w * w + h * h);
+    const pad = Math.max(diag * 0.14, 4);
+    const minX = s.minX - pad;
+    const minY = -s.maxY - pad;
+    const vw = w + 2 * pad;
+    const vh = h + 2 * pad;
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="${minX} ${minY} ${vw} ${vh}">
+      <rect x="${minX}" y="${minY}" width="${vw}" height="${vh}" fill="#ffffff"/>
+      <rect x="${s.minX}" y="${-s.maxY}" width="${w}" height="${h}" fill="none" stroke="#94a3b8" stroke-width="${Math.max(diag * 0.01, 0.6)}" stroke-dasharray="${Math.max(diag * 0.03, 1.4)} ${Math.max(diag * 0.02, 1)}"/>
+      <path d="${dxfPathD(s)}" fill="${color}" fill-opacity="0.25" fill-rule="evenodd" stroke="${color}" stroke-width="${Math.max(diag * 0.02, 1)}" stroke-linejoin="round"/>
+    </svg>`;
+  }
+  if (item.plegadoActivo) {
+    const g = computeGeometry(item.segments);
+    const rounded = computeRoundedPoints(item.segments, g.pts, g.dirs);
+    const pts = rounded.map((p) => ({ x: p.x, y: -p.y }));
+    const box = bbox(g.pts);
+    const w = Math.max(box.maxX - box.minX, 1);
+    const h = Math.max(box.maxY - box.minY, 1);
+    const diag = Math.sqrt(w * w + h * h);
+    const pad = Math.max(diag * 0.3, 10);
+    const minX = box.minX - pad;
+    const minY = box.minY - pad;
+    const vw = w + 2 * pad;
+    const vh = h + 2 * pad;
+    const polylineStr = pts.map((p) => `${p.x},${p.y}`).join(" ");
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="${minX} ${minY} ${vw} ${vh}">
+      <rect x="${minX}" y="${minY}" width="${vw}" height="${vh}" fill="#ffffff"/>
+      <polyline points="${polylineStr}" fill="none" stroke="${color}" stroke-width="${Math.max(diag * 0.032, 1.1)}" stroke-linejoin="round" stroke-linecap="round"/>
+    </svg>`;
+  }
+  const ancho = parseFloat(item.anchoManual) || 1;
+  const largo = parseFloat(item.largoManual) || 1;
+  const pad = 6;
+  const scale = Math.min((size - pad * 2) / ancho, (size - pad * 2) / largo);
+  const w = ancho * scale;
+  const h = largo * scale;
+  const ox = (size - w) / 2;
+  const oy = (size - h) / 2;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
+    <rect width="${size}" height="${size}" fill="#ffffff"/>
+    <rect x="${ox}" y="${oy}" width="${w}" height="${h}" fill="${color}" fill-opacity="0.18" stroke="${color}" stroke-width="1.4"/>
+  </svg>`;
+}
+
+function svgToPngDataUrl(svgMarkup, px) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = px;
+      canvas.height = px;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, px, px);
+      ctx.drawImage(img, 0, 0, px, px);
+      resolve(canvas.toDataURL("image/png"));
+    };
+    img.onerror = () => resolve(null);
+    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgMarkup);
+  });
+}
+
 function ItemThumb({ item, size = 56 }) {
   if (item.dxfShape) {
     return <DxfShapeSvg shape={item.dxfShape} size={size} strokeWidth={Math.max(size * 0.02, 1)} />;
@@ -1260,11 +1331,17 @@ export default function App() {
     doc.text(`Fecha: ${new Date().toLocaleDateString("es-AR")}`, titleX, y);
     y += 8;
 
-    // Tabla de ítems: medidas, cantidad, kilos y precio por ítem
+    // Miniatura de cada pieza (rasterizada a PNG) para meter en la tabla
+    const thumbDataUrls = await Promise.all(
+      items.map((it) => svgToPngDataUrl(itemThumbSvgMarkup(it, 160, colorForItem(it.id)), 160))
+    );
+
+    // Tabla de ítems: miniatura, medidas, cantidad, kilos y precio por ítem
     const filas = items.map((it) => {
       const m = metricsList.find((x) => x.id === it.id);
       const mat = MATERIALES.find((mm) => mm.key === it.material)?.label || it.material;
       return [
+        "",
         it.nombre,
         `Láser${it.plegadoActivo ? " + plegado" : ""}`,
         mat,
@@ -1278,11 +1355,24 @@ export default function App() {
 
     autoTable(doc, {
       startY: y,
-      head: [["Ítem", "Proceso", "Material", "Espesor", "Medidas", "Cant.", "Kilos", "Precio (sin IVA)"]],
+      head: [["Pieza", "Ítem", "Proceso", "Material", "Espesor", "Medidas", "Cant.", "Kilos", "Precio (sin IVA)"]],
       body: filas,
       styles: { fontSize: 8, cellPadding: 2.2 },
       headStyles: { fillColor: [15, 36, 55] },
+      bodyStyles: { minCellHeight: 16 },
+      columnStyles: { 0: { cellWidth: 18 } },
       margin: { left: marginX, right: marginX },
+      didDrawCell: (data) => {
+        if (data.section === "body" && data.column.index === 0) {
+          const url = thumbDataUrls[data.row.index];
+          if (url) {
+            const size = Math.min(data.cell.width, data.cell.height) - 3;
+            const x = data.cell.x + (data.cell.width - size) / 2;
+            const y2 = data.cell.y + (data.cell.height - size) / 2;
+            doc.addImage(url, "PNG", x, y2, size, size, undefined, "FAST");
+          }
+        }
+      },
     });
     y = doc.lastAutoTable.finalY + 8;
 
