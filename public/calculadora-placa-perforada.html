@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Calculadora de placa perforada</title>
+<style>
+  :root{
+    --bg:#12181f;
+    --panel:#1b232c;
+    --panel2:#212b35;
+    --line:#33404c;
+    --steel:#8fa4b8;
+    --steel-dark:#5a6d80;
+    --accent:#e8871e;
+    --accent-dim:#c76f13;
+    --accent2:#4fa3d1;
+    --text:#e7ecf1;
+    --text-mut:#93a2b0;
+    --ok:#4caf7d;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:'Segoe UI',Roboto,Arial,sans-serif;
+    padding:24px;
+  }
+  h1{
+    font-size:19px;
+    font-weight:600;
+    letter-spacing:.3px;
+    margin:0 0 4px;
+    color:var(--text);
+  }
+  .sub{
+    color:var(--text-mut);
+    font-size:13px;
+    margin:0 0 20px;
+  }
+  .wrap{
+    display:grid;
+    grid-template-columns:300px 1fr;
+    gap:18px;
+    align-items:start;
+  }
+  @media (max-width:820px){
+    .wrap{grid-template-columns:1fr;}
+  }
+  .panel{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:16px;
+  }
+  .panel + .panel{margin-top:14px;}
+  .panel h2{
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:1px;
+    color:var(--accent);
+    margin:0 0 12px;
+    font-weight:600;
+  }
+  .row{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+    margin-bottom:10px;
+  }
+  .row label{
+    font-size:13px;
+    color:var(--text-mut);
+    flex:1;
+  }
+  .row input, .row select{
+    width:110px;
+    background:var(--panel2);
+    border:1px solid var(--line);
+    color:var(--text);
+    padding:6px 8px;
+    border-radius:4px;
+    font-size:13px;
+    font-family:inherit;
+    text-align:right;
+  }
+  .row select{text-align:left;width:150px;}
+  .row input[type="range"]{
+    width:150px;
+    accent-color:var(--accent2);
+    padding:0;
+  }
+  .row input:focus, .row select:focus{
+    outline:none;
+    border-color:var(--accent);
+  }
+  .canvas-panel{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:16px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+  }
+  svg{width:100%;height:auto;max-height:520px;}
+  .results{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+    gap:10px;
+    margin-top:16px;
+    width:100%;
+  }
+  .metric{
+    background:var(--panel2);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:10px 12px;
+  }
+  .metric .k{
+    font-size:11px;
+    color:var(--text-mut);
+    text-transform:uppercase;
+    letter-spacing:.5px;
+    margin-bottom:4px;
+  }
+  .metric .v{
+    font-size:19px;
+    font-weight:600;
+    color:var(--text);
+  }
+  .metric .v.big{
+    color:var(--accent);
+    font-size:23px;
+  }
+  .warn{
+    font-size:12px;
+    color:#e8871e;
+    background:rgba(232,135,30,.1);
+    border:1px solid rgba(232,135,30,.35);
+    padding:8px 10px;
+    border-radius:4px;
+    margin-top:10px;
+    display:none;
+  }
+  .warn.show{display:block;}
+  .hint{
+    font-size:11px;
+    color:var(--text-mut);
+    margin-top:-4px;
+    margin-bottom:12px;
+    line-height:1.5;
+  }
+</style>
+</head>
+<body>
+
+<h1>Calculadora de placa perforada</h1>
+<p class="sub">Peso neto de una placa rectangular con agujeros de anclaje en el perímetro — pensada como placa base de columna para un plano de galpón.</p>
+
+<div class="wrap">
+  <div>
+    <div class="panel">
+      <h2>Placa</h2>
+      <div class="row"><label>Largo (mm)</label><input type="number" id="largo" value="6000" min="1"></div>
+      <div class="row"><label>Ancho (mm)</label><input type="number" id="ancho" value="2000" min="1"></div>
+      <div class="row"><label>Espesor (mm)</label><input type="number" id="espesor" value="10" min="0.1" step="0.1"></div>
+      <div class="row"><label>Material</label>
+        <select id="material">
+          <option value="7850">Acero al carbono (7850 kg/m3)</option>
+          <option value="8000">Acero inoxidable (8000 kg/m3)</option>
+          <option value="7200">Hierro fundido (7200 kg/m3)</option>
+          <option value="2700">Aluminio (2700 kg/m3)</option>
+          <option value="8960">Cobre (8960 kg/m3)</option>
+          <option value="8800">Bronce (8800 kg/m3)</option>
+          <option value="custom">Personalizado...</option>
+        </select>
+      </div>
+      <div class="row" id="rowCustom" style="display:none;">
+        <label>Densidad (kg/m3)</label><input type="number" id="densidadCustom" value="7850" min="1">
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Agujeros</h2>
+      <div class="row"><label>Patrón</label>
+        <select id="patron">
+          <option value="perimetro">Perímetro (anclajes)</option>
+          <option value="grilla">Grilla interior</option>
+        </select>
+      </div>
+      <div class="row"><label>Diámetro (mm)</label><input type="number" id="diametro" value="24" min="1"></div>
+      <div class="row"><label>Margen borde (mm)</label><input type="number" id="margen" value="80" min="0"></div>
+
+      <div id="grupoPerimetro">
+        <div class="row"><label>Agujeros en lado largo</label><input type="number" id="nHoriz" value="4" min="1" step="1"></div>
+        <div class="row"><label>Agujeros en lado corto</label><input type="number" id="nVert" value="2" min="1" step="1"></div>
+        <div class="hint">Incluye las esquinas. Ej: 4 y 2 = un agujero en cada esquina más dos intermedios en los lados largos — típico de una placa base de columna.</div>
+      </div>
+
+      <div id="grupoGrilla" style="display:none;">
+        <div class="row"><label>Filas</label><input type="number" id="filas" value="3" min="0" step="1"></div>
+        <div class="row"><label>Columnas</label><input type="number" id="columnas" value="8" min="0" step="1"></div>
+        <div class="hint">Los agujeros se reparten en forma pareja dentro del área delimitada por el margen de borde.</div>
+      </div>
+
+      <div class="warn" id="warnHoles">Los agujeros se superponen o no entran con estas medidas — ajustá diámetro, margen o cantidad.</div>
+    </div>
+  </div>
+
+  <div class="canvas-panel">
+    <svg id="svg" viewBox="0 0 900 600" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div class="results" id="results"></div>
+  </div>
+</div>
+
+<h1 style="margin-top:32px;">Aprovechamiento de chapa</h1>
+<p class="sub">Cuántas piezas de esta placa entran en una chapa madre de medida estándar, y cuántas chapas hacen falta para el pedido.</p>
+
+<div class="wrap">
+  <div>
+    <div class="panel">
+      <h2>Chapa madre</h2>
+      <div class="row"><label>Largo (mm)</label><input type="number" id="sheetLargo" value="3000" min="1"></div>
+      <div class="row"><label>Ancho (mm)</label><input type="number" id="sheetAncho" value="1500" min="1"></div>
+      <div class="row"><label>Separación entre piezas (mm)</label><input type="number" id="separacionChapa" value="5" min="0"></div>
+      <div class="row"><label>Margen de chapa (mm)</label><input type="number" id="margenChapa" value="10" min="0"></div>
+      <div class="hint">El espesor y el material se toman de la placa definida arriba.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Pedido — pieza 1 (la de arriba)</h2>
+      <div class="row"><label>Cantidad de piezas</label><input type="number" id="cantidadPedida" value="24" min="0" step="1"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Pedido — pieza 2</h2>
+      <div class="row"><label>Largo (mm)</label><input type="number" id="largo2" value="800" min="1"></div>
+      <div class="row"><label>Ancho (mm)</label><input type="number" id="ancho2" value="400" min="1"></div>
+      <div class="row"><label>Cantidad de piezas</label><input type="number" id="cantidadPedida2" value="16" min="0" step="1"></div>
+      <div class="hint">Pieza simple (sin agujeros), mismo espesor y material que la pieza 1. Sirve para probar cómo combinar dos piezas distintas en la misma chapa.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Reparto en la chapa</h2>
+      <div class="row"><label>Alto para pieza 1</label><input type="range" id="reparto" value="50" min="0" max="100" step="1"><span id="repartoVal" style="width:36px;text-align:right;font-size:13px;color:var(--text-mut);">50%</span></div>
+      <div class="hint">Define hasta cuánto alto puede ocupar la pieza 1. La pieza 2 arranca justo después de la última fila real de pieza 1, sin dejar hueco vacío.</div>
+      <div class="warn" id="warnChapa">Alguna de las dos piezas no entra en su zona de la chapa con estas medidas.</div>
+    </div>
+  </div>
+
+  <div class="canvas-panel">
+    <svg id="svgChapa" viewBox="0 0 900 600" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div class="results" id="resultsChapa"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const inputs = ['largo','ancho','espesor','filas','columnas','diametro','margen','densidadCustom','nHoriz','nVert','sheetLargo','sheetAncho','separacionChapa','margenChapa','cantidadPedida','largo2','ancho2','cantidadPedida2','reparto'];
+inputs.forEach(id => $(id).addEventListener('input', render));
+$('reparto').addEventListener('input', () => {
+  $('repartoVal').textContent = $('reparto').value + '%';
+});
+$('material').addEventListener('change', () => {
+  $('rowCustom').style.display = $('material').value === 'custom' ? 'flex' : 'none';
+  render();
+});
+$('patron').addEventListener('change', () => {
+  const esPerimetro = $('patron').value === 'perimetro';
+  $('grupoPerimetro').style.display = esPerimetro ? 'block' : 'none';
+  $('grupoGrilla').style.display = esPerimetro ? 'none' : 'block';
+  render();
+});
+
+function fmt(n, dec=1){
+  return n.toLocaleString('es-AR', {minimumFractionDigits:dec, maximumFractionDigits:dec});
+}
+
+function render(){
+  const L = Math.max(1, parseFloat($('largo').value) || 0);
+  const W = Math.max(1, parseFloat($('ancho').value) || 0);
+  const t = Math.max(0.1, parseFloat($('espesor').value) || 0);
+  const d = Math.max(0.1, parseFloat($('diametro').value) || 0);
+  const margen = Math.max(0, parseFloat($('margen').value) || 0);
+  const matVal = $('material').value;
+  const dens = matVal === 'custom' ? Math.max(1, parseFloat($('densidadCustom').value) || 7850) : parseFloat(matVal);
+  const patron = $('patron').value;
+
+  const usableW = L - 2*margen;
+  const usableH = W - 2*margen;
+
+  let positions = [];
+  let overlap = false;
+  let fits = true;
+
+  if (usableW <= 0 || usableH <= 0 || d > usableW || d > usableH){
+    fits = false;
+  } else if (patron === 'perimetro'){
+    const nH = Math.max(1, Math.floor(parseFloat($('nHoriz').value) || 0));
+    const nV = Math.max(1, Math.floor(parseFloat($('nVert').value) || 0));
+    const x0 = margen, x1 = L - margen, y0 = margen, y1 = W - margen;
+    const stepH = nH > 1 ? (x1-x0)/(nH-1) : 0;
+    const stepV = nV > 1 ? (y1-y0)/(nV-1) : 0;
+
+    for (let i=0;i<nH;i++){
+      const x = nH>1 ? x0 + i*stepH : L/2;
+      positions.push([x,y0]);
+      positions.push([x,y1]);
+    }
+    for (let i=1;i<nV-1;i++){
+      const y = y0 + i*stepV;
+      positions.push([x0,y]);
+      positions.push([x1,y]);
+    }
+    if ((nH>1 && stepH < d) || (nV>1 && stepV < d)) overlap = true;
+  } else {
+    const filas = Math.max(0, Math.floor(parseFloat($('filas').value) || 0));
+    const cols = Math.max(0, Math.floor(parseFloat($('columnas').value) || 0));
+    if (filas > 0 && cols > 0){
+      const stepX = cols > 1 ? usableW/(cols-1) : 0;
+      const stepY = filas > 1 ? usableH/(filas-1) : 0;
+      for (let r=0;r<filas;r++){
+        for (let c=0;c<cols;c++){
+          const x = cols>1 ? margen + c*stepX : L/2;
+          const y = filas>1 ? margen + r*stepY : W/2;
+          positions.push([x,y]);
+        }
+      }
+      if ((cols>1 && stepX < d) || (filas>1 && stepY < d)) overlap = true;
+    }
+  }
+
+  const nHoles = positions.length;
+  $('warnHoles').classList.toggle('show', !fits || overlap);
+
+  // Volumes (mm3 -> m3)
+  const plateVolMM3 = L * W * t;
+  const holeVolMM3 = nHoles > 0 && fits ? nHoles * Math.PI/4 * d*d * t : 0;
+  const netVolMM3 = Math.max(0, plateVolMM3 - holeVolMM3);
+  const netVolM3 = netVolMM3 / 1e9;
+  const grossVolM3 = plateVolMM3 / 1e9;
+
+  const netWeightKg = netVolM3 * dens;
+  const grossWeightKg = grossVolM3 * dens;
+  const removedKg = grossWeightKg - netWeightKg;
+  const areaM2 = (L*W)/1e6;
+
+  drawSVG(L, W, positions, fits ? d : 0, margen);
+
+  $('results').innerHTML = `
+    <div class="metric"><div class="k">Peso neto</div><div class="v big">${fmt(netWeightKg)} kg</div></div>
+    <div class="metric"><div class="k">Peso bruto</div><div class="v">${fmt(grossWeightKg)} kg</div></div>
+    <div class="metric"><div class="k">Área de placa</div><div class="v">${fmt(areaM2,2)} m²</div></div>
+    <div class="metric"><div class="k">Cantidad de agujeros</div><div class="v">${nHoles}</div></div>
+    <div class="metric"><div class="k">Densidad</div><div class="v">${fmt(dens,0)} kg/m³</div></div>
+  `;
+
+  renderNesting(L, W, t, dens, netWeightKg);
+}
+
+function renderNesting(pieceL, pieceW, t, dens, netWeightKg){
+  const sheetL = Math.max(1, parseFloat($('sheetLargo').value) || 0);
+  const sheetW = Math.max(1, parseFloat($('sheetAncho').value) || 0);
+  const gap = Math.max(0, parseFloat($('separacionChapa').value) || 0);
+  const margenChapa = Math.max(0, parseFloat($('margenChapa').value) || 0);
+  const cantidad1 = Math.max(0, Math.floor(parseFloat($('cantidadPedida').value) || 0));
+
+  const pieceL2 = Math.max(1, parseFloat($('largo2').value) || 0);
+  const pieceW2 = Math.max(1, parseFloat($('ancho2').value) || 0);
+  const cantidad2 = Math.max(0, Math.floor(parseFloat($('cantidadPedida2').value) || 0));
+  const repartoPct = Math.max(0, Math.min(100, parseFloat($('reparto').value) || 0));
+
+  const usableL = sheetL - 2*margenChapa;
+  const usableW = sheetW - 2*margenChapa;
+
+  function gridFit(SL, SW, PL, PW){
+    if (PL <= 0 || PW <= 0 || PL > SL || PW > SW) return {nx:0, ny:0, count:0, rot:false, w:PL, h:PW};
+    const nx = Math.floor((SL + gap) / (PL + gap));
+    const ny = Math.floor((SW + gap) / (PW + gap));
+    return {nx, ny, count: nx*ny, rot:false, w:PL, h:PW};
+  }
+
+  function bestFit(SL, SW, PL, PW){
+    const normal = gridFit(SL, SW, PL, PW);
+    const rotated = gridFit(SL, SW, PW, PL);
+    return rotated.count > normal.count ? {...rotated, rot:true} : {...normal, rot:false};
+  }
+
+  // Zone 1 (top) is capped by the slider; piece 1 packs tightly from the top edge
+  const dividerGap = (cantidad1 > 0 && cantidad2 > 0) ? gap : 0;
+  const zone1CapH = usableW * repartoPct/100;
+
+  const grid1 = cantidad1 > 0 ? bestFit(usableL, zone1CapH, pieceL, pieceW) : {nx:0,ny:0,count:0,rot:false,w:pieceL,h:pieceW};
+
+  // Real height actually used by piece 1's rows (not the nominal slider slice)
+  const occupied1H = grid1.ny > 0 ? grid1.ny*(grid1.h+gap) - gap : 0;
+
+  // Piece 2 gets whatever height is really left over, starting right after piece 1's last row
+  const zone2H = Math.max(0, usableW - occupied1H - dividerGap);
+  const grid2 = cantidad2 > 0 ? bestFit(usableL, zone2H, pieceL2, pieceW2) : {nx:0,ny:0,count:0,rot:false,w:pieceL2,h:pieceW2};
+
+  const piezas1PorChapa = grid1.count;
+  const piezas2PorChapa = grid2.count;
+
+  const fits1 = cantidad1 === 0 || piezas1PorChapa > 0;
+  const fits2 = cantidad2 === 0 || piezas2PorChapa > 0;
+  $('warnChapa').classList.toggle('show', !fits1 || !fits2);
+
+  const chapas1 = piezas1PorChapa > 0 ? Math.ceil(cantidad1/piezas1PorChapa) : (cantidad1 > 0 ? 0 : 0);
+  const chapas2 = piezas2PorChapa > 0 ? Math.ceil(cantidad2/piezas2PorChapa) : (cantidad2 > 0 ? 0 : 0);
+  const chapasNecesarias = Math.max(chapas1, chapas2);
+
+  const area1M2 = (pieceL*pieceW)/1e6;
+  const area2M2 = (pieceL2*pieceW2)/1e6;
+  const sheetAreaM2 = (sheetL*sheetW)/1e6;
+  const aprovechamiento = sheetAreaM2 > 0 ? ((piezas1PorChapa*area1M2 + piezas2PorChapa*area2M2)/sheetAreaM2)*100 : 0;
+
+  const sheetWeightKg = (sheetL*sheetW*t/1e9)*dens;
+  const pieceWeight2Kg = (pieceL2*pieceW2*t/1e9)*dens;
+  const pesoTotalPiezas = cantidad1*netWeightKg + cantidad2*pieceWeight2Kg;
+  const pesoTotalChapas = chapasNecesarias * sheetWeightKg;
+
+  drawSheetSVG(sheetL, sheetW, margenChapa, gap, occupied1H, dividerGap,
+    grid1.w, grid1.h, grid1.nx, grid1.ny,
+    grid2.w, grid2.h, grid2.nx, grid2.ny);
+
+  $('resultsChapa').innerHTML = `
+    <div class="metric"><div class="k"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--accent);margin-right:6px;"></span>Pieza 1 por chapa</div><div class="v big">${piezas1PorChapa}</div></div>
+    <div class="metric"><div class="k"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--accent2);margin-right:6px;"></span>Pieza 2 por chapa</div><div class="v big">${piezas2PorChapa}</div></div>
+    <div class="metric"><div class="k">Chapas necesarias</div><div class="v">${chapasNecesarias}</div></div>
+    <div class="metric"><div class="k">Aprovechamiento</div><div class="v">${fmt(aprovechamiento,1)} %</div></div>
+    <div class="metric"><div class="k">Peso total del pedido</div><div class="v">${fmt(pesoTotalPiezas)} kg</div></div>
+    <div class="metric"><div class="k">Peso total en chapas</div><div class="v">${fmt(pesoTotalChapas)} kg</div></div>
+  `;
+}
+
+function drawSVG(L, W, positions, d, margen){
+  const svg = $('svg');
+  const padding = 60;
+  const maxW = 900 - padding*2;
+  const maxH = 600 - padding*2 - 40;
+  const scale = Math.min(maxW/L, maxH/W);
+  const drawW = L*scale;
+  const drawH = W*scale;
+  const ox = (900 - drawW)/2;
+  const oy = 50;
+
+  let holesSVG = '';
+  positions.forEach(([x,y]) => {
+    const cx = ox + x*scale;
+    const cy = oy + y*scale;
+    const r = (d/2)*scale;
+    holesSVG += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="var(--bg)" stroke="var(--steel-dark)" stroke-width="1.2"/>`;
+  });
+
+  const dimY = oy + drawH + 30;
+  const dimX = ox - 30;
+
+  svg.innerHTML = `
+    <rect x="${ox}" y="${oy}" width="${drawW}" height="${drawH}" fill="var(--steel)" fill-opacity="0.14" stroke="var(--steel)" stroke-width="2"/>
+    ${holesSVG}
+    <line x1="${ox}" y1="${dimY}" x2="${ox+drawW}" y2="${dimY}" stroke="var(--text-mut)" stroke-width="1"/>
+    <line x1="${ox}" y1="${dimY-5}" x2="${ox}" y2="${dimY+5}" stroke="var(--text-mut)" stroke-width="1"/>
+    <line x1="${ox+drawW}" y1="${dimY-5}" x2="${ox+drawW}" y2="${dimY+5}" stroke="var(--text-mut)" stroke-width="1"/>
+    <text x="${ox+drawW/2}" y="${dimY+20}" text-anchor="middle" font-size="13" fill="var(--text-mut)">${fmt(L,0)} mm</text>
+    <line x1="${dimX}" y1="${oy}" x2="${dimX}" y2="${oy+drawH}" stroke="var(--text-mut)" stroke-width="1"/>
+    <line x1="${dimX-5}" y1="${oy}" x2="${dimX+5}" y2="${oy}" stroke="var(--text-mut)" stroke-width="1"/>
+    <line x1="${dimX-5}" y1="${oy+drawH}" x2="${dimX+5}" y2="${oy+drawH}" stroke="var(--text-mut)" stroke-width="1"/>
+    <text x="${dimX-12}" y="${oy+drawH/2}" text-anchor="middle" font-size="13" fill="var(--text-mut)" transform="rotate(-90 ${dimX-12} ${oy+drawH/2})">${fmt(W,0)} mm</text>
+  `;
+}
+
+function drawSheetSVG(sheetL, sheetW, margenChapa, gap, occupied1H, dividerGap,
+    p1L, p1W, nx1, ny1, p2L, p2W, nx2, ny2){
+  const svg = $('svgChapa');
+  const padding = 60;
+  const maxW = 900 - padding*2;
+  const maxH = 600 - padding*2 - 40;
+  const scale = Math.min(maxW/sheetL, maxH/sheetW);
+  const drawW = sheetL*scale;
+  const drawH = sheetW*scale;
+  const ox = (900 - drawW)/2;
+  const oy = 50;
+
+  function piecesGrid(x0, y0, PL, PW, nx, ny, colorVar){
+    let out = '';
+    if (nx > 0 && ny > 0 && PL > 0 && PW > 0){
+      for (let r=0;r<ny;r++){
+        for (let c=0;c<nx;c++){
+          const px = x0 + c*(PL+gap);
+          const py = y0 + r*(PW+gap);
+          const rx = ox + px*scale;
+          const ry = oy + py*scale;
+          out += `<rect x="${rx}" y="${ry}" width="${PL*scale}" height="${PW*scale}" fill="${colorVar}" fill-opacity="0.22" stroke="${colorVar}" stroke-width="1.2"/>`;
+        }
+      }
+    }
+    return out;
+  }
+
+  const zone1SVG = piecesGrid(margenChapa, margenChapa, p1L, p1W, nx1, ny1, 'var(--accent)');
+  const zone2Y0 = margenChapa + occupied1H + dividerGap;
+  const zone2SVG = piecesGrid(margenChapa, zone2Y0, p2L, p2W, nx2, ny2, 'var(--accent2)');
+
+  const dividerYpx = oy + (margenChapa + occupied1H + dividerGap/2)*scale;
+  const dividerSVG = dividerGap > 0
+    ? `<line x1="${ox}" y1="${dividerYpx}" x2="${ox+drawW}" y2="${dividerYpx}" stroke="var(--text-mut)" stroke-width="1" stroke-dasharray="4 4"/>`
+    : '';
+
+  const dimY = oy + drawH + 30;
+  const dimX = ox - 30;
+
+  svg.innerHTML = `
+    <rect x="${ox}" y="${oy}" width="${drawW}" height="${drawH}" fill="var(--steel)" fill-opacity="0.08" stroke="var(--steel)" stroke-width="2"/>
+    ${zone1SVG}
+    ${zone2SVG}
+    ${dividerSVG}
+    <line x1="${ox}" y1="${dimY}" x2="${ox+drawW}" y2="${dimY}" stroke="var(--text-mut)" stroke-width="1"/>
+    <line x1="${ox}" y1="${dimY-5}" x2="${ox}" y2="${dimY+5}" stroke="var(--text-mut)" stroke-width="1"/>
+    <line x1="${ox+drawW}" y1="${dimY-5}" x2="${ox+drawW}" y2="${dimY+5}" stroke="var(--text-mut)" stroke-width="1"/>
+    <text x="${ox+drawW/2}" y="${dimY+20}" text-anchor="middle" font-size="13" fill="var(--text-mut)">${fmt(sheetL,0)} mm</text>
+    <line x1="${dimX}" y1="${oy}" x2="${dimX}" y2="${oy+drawH}" stroke="var(--text-mut)" stroke-width="1"/>
+    <line x1="${dimX-5}" y1="${oy}" x2="${dimX+5}" y2="${oy}" stroke="var(--text-mut)" stroke-width="1"/>
+    <line x1="${dimX-5}" y1="${oy+drawH}" x2="${dimX+5}" y2="${oy+drawH}" stroke="var(--text-mut)" stroke-width="1"/>
+    <text x="${dimX-12}" y="${oy+drawH/2}" text-anchor="middle" font-size="13" fill="var(--text-mut)" transform="rotate(-90 ${dimX-12} ${oy+drawH/2})">${fmt(sheetW,0)} mm</text>
+  `;
+}
+
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "plasmart-dev",
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": [
+        "-c",
+        "export PATH=/home/agustin/.nvm/versions/node/v24.20.0/bin:$PATH && cd \"/home/agustin/TRANSFIL/PLASMART 3.0\" && npm run dev -- --host 127.0.0.1 --port 5173"
+      ],
+      "port": 5173
+    }
+  ]
+}
