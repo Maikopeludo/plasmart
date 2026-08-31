@@ -56,16 +56,14 @@ const ESPESORES_CARBONO = [
    ========================================================================= */
 const IVA_PCT = 21;
 
-// Precio de la chapa (material) por kilo, según tramo de espesor (mm).
-// "hasta" es inclusive y los tramos se evalúan en orden — se usa el
-// primer tramo cuyo límite alcance el espesor del ítem.
+// Precio por kilo (material + corte láser + plegado, todo incluido salvo
+// IVA), según tramo de espesor (mm). "hasta" es inclusive y los tramos se
+// evalúan en orden — se usa el primer tramo cuyo límite alcance el
+// espesor del ítem.
 const PRECIOS_CHAPA_POR_ESPESOR = [
-  { hasta: 12.7, precioKgSinIva: 4000 },
-  { hasta: 31.8, precioKgSinIva: 4500 },
+  { hasta: 12.7, precioKgSinIva: 4100 },
+  { hasta: Infinity, precioKgSinIva: 4300 },
 ];
-
-// Precio del proceso de corte láser + plegado, por kilo procesado.
-const PRECIO_PROCESO_KG_SIN_IVA = 5000;
 
 function precioChapaPorKg(espesor) {
   const e = parseFloat(espesor) || 0;
@@ -654,7 +652,7 @@ function computeItemMetrics(item) {
   const pesoTotalChapasKg = chapasNecesarias * pesoChapaKg;
   const cabe = cantidad === 0 || piezasPorChapa > 0;
 
-  const precioKgSinIva = precioChapaPorKg(espesor) + PRECIO_PROCESO_KG_SIN_IVA;
+  const precioKgSinIva = precioChapaPorKg(espesor);
   const precioTotalSinIva = pesoTotalKg * precioKgSinIva;
   const precioTotalConIva = precioTotalSinIva * (1 + IVA_PCT / 100);
 
@@ -1274,13 +1272,13 @@ export default function App() {
         `${fmt(m.anchoPieza, 0)} × ${fmt(m.largoPieza, 0)} mm`,
         `${m.cantidad}`,
         `${fmt(m.pesoTotalKg, 1)} kg`,
-        fmtMoney(m.precioTotalConIva),
+        fmtMoney(m.precioTotalSinIva),
       ];
     });
 
     autoTable(doc, {
       startY: y,
-      head: [["Ítem", "Proceso", "Material", "Espesor", "Medidas", "Cant.", "Kilos", "Precio (c/IVA)"]],
+      head: [["Ítem", "Proceso", "Material", "Espesor", "Medidas", "Cant.", "Kilos", "Precio (sin IVA)"]],
       body: filas,
       styles: { fontSize: 8, cellPadding: 2.2 },
       headStyles: { fillColor: [15, 36, 55] },
@@ -1718,6 +1716,22 @@ export default function App() {
                     Leemos líneas, arcos, círculos y curvas del plano para calcular el ancho y
                     largo reales de la pieza automáticamente — no hace falta cargarlos a mano.
                   </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: ORANGE,
+                      background: "rgba(232,135,30,.1)",
+                      border: "1px solid rgba(232,135,30,.35)",
+                      padding: "8px 10px",
+                      borderRadius: 6,
+                      marginTop: 10,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Requisitos del archivo: escala 1:1 (1 unidad del dibujo = 1 mm real), formato
+                    DXF, con todo el contorno de la pieza dibujado en la capa "0" — sin
+                    acotaciones, textos, rótulos ni otras anotaciones, solo la geometría de corte.
+                  </div>
                 </div>
               )}
             </div>
@@ -2110,8 +2124,8 @@ export default function App() {
               <div style={st.metricV}>{m.cantidad}</div>
             </div>
             <div style={st.metric}>
-              <div style={st.metricK}>Precio este ítem (c/IVA)</div>
-              <div style={{ ...st.metricV, color: CYAN }}>{fmtMoney(m.precioTotalConIva)}</div>
+              <div style={st.metricK}>Precio este ítem (sin IVA)</div>
+              <div style={{ ...st.metricV, color: CYAN }}>{fmtMoney(m.precioTotalSinIva)}</div>
             </div>
           </div>
         </div>
@@ -2360,9 +2374,9 @@ export default function App() {
                 </div>
 
                 <div style={{ textAlign: "right", minWidth: 110 }}>
-                  <div style={st.metricK}>Precio (c/IVA)</div>
+                  <div style={st.metricK}>Precio (sin IVA)</div>
                   <div style={{ fontFamily: MONO, fontSize: 15, color: CYAN, fontWeight: 600 }}>
-                    {fmtMoney(im.precioTotalConIva)}
+                    {fmtMoney(im.precioTotalSinIva)}
                   </div>
                 </div>
 
