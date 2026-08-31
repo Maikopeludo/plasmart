@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import Cotizador from "../cotizador_corte_plegado.jsx";
 import GeneradorPerfil from "../generador_perfil_plegado.jsx";
+import Welcome from "./Welcome.jsx";
 
 const TOOLS = [
   { key: "cotizador", label: "Cotizador corte + plegado" },
@@ -9,6 +10,11 @@ const TOOLS = [
 
 export default function App() {
   const [tool, setTool] = useState("cotizador");
+  const [started, setStarted] = useState(false);
+
+  if (!started) {
+    return <Welcome onStart={() => setStarted(true)} />;
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: "#0c1b2a" }}>

@@ -1500,7 +1500,7 @@ export default function App() {
       {/* ---- configuración + preview de pieza ---- */}
       <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginBottom: 18 }}>
         {/* Panel de configuración */}
-        <div style={{ ...st.panel, flex: "1 1 360px", minWidth: 320 }}>
+        <div style={{ ...st.panel, flex: "1 1 360px", minWidth: "min(320px, 100%)" }}>
           <div style={{ ...st.eyebrow, marginBottom: 10 }}>{activeItem.nombre} · Proceso</div>
 
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
@@ -1516,7 +1516,7 @@ export default function App() {
             </button>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 10, marginBottom: 10 }}>
             <div>
               <label style={st.label}>Material</label>
               <select
@@ -1574,7 +1574,7 @@ export default function App() {
           )}
 
           {!activeItem.plegadoActivo ? (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 10, marginBottom: 10 }}>
               <div>
                 <label style={st.label}>Ancho de pieza (mm)</label>
                 <input
@@ -1734,7 +1734,7 @@ export default function App() {
         </div>
 
         {/* Panel de vista previa + métricas */}
-        <div style={{ ...st.panel, flex: "1 1 380px", minWidth: 320 }}>
+        <div style={{ ...st.panel, flex: "1 1 380px", minWidth: "min(320px, 100%)" }}>
           <div style={{ ...st.eyebrow, marginBottom: 10 }}>Vista previa de pieza</div>
           <PiezaPreview />
           <div
@@ -1973,6 +1973,8 @@ export default function App() {
                 style={{
                   display: "flex",
                   alignItems: "center",
+                  flexWrap: "wrap",
+                  rowGap: 8,
                   gap: 14,
                   background: it.id === activeId ? PANEL2 : "transparent",
                   border: `1px solid ${it.id === activeId ? BORDER2 : BORDER}`,

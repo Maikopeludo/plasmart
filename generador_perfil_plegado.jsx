@@ -377,7 +377,7 @@ export default function App() {
       }}
     >
       {/* Panel de datos */}
-      <div style={{ flex: "1 1 320px", minWidth: 300 }}>
+      <div style={{ flex: "1 1 320px", minWidth: "min(300px, 100%)" }}>
         <div
           style={{
             fontFamily: "'IBM Plex Mono', monospace",
@@ -579,7 +579,7 @@ export default function App() {
       <div
         style={{
           flex: "2 1 420px",
-          minWidth: 340,
+          minWidth: "min(340px, 100%)",
           background:
             "radial-gradient(circle at 20px 20px, #16324a 1px, transparent 1px)",
           backgroundSize: "18px 18px",
