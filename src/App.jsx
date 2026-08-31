@@ -47,22 +47,6 @@ export default function App() {
             {t.label}
           </button>
         ))}
-        <a
-          href="/calculadora-placa-perforada.html"
-          target="_blank"
-          rel="noreferrer"
-          style={{
-            background: "#12283d",
-            border: "1px solid #21415c",
-            color: "#a9c6d8",
-            borderRadius: 6,
-            padding: "7px 12px",
-            fontSize: 13,
-            textDecoration: "none",
-          }}
-        >
-          Calculadora de placa perforada ↗
-        </a>
       </nav>
 
       <div style={{ padding: 20 }}>

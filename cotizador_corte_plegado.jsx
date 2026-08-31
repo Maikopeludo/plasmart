@@ -1163,11 +1163,6 @@ export default function App() {
       return next;
     });
   }
-  function togglePlegado(id) {
-    setItems((arr) =>
-      arr.map((i) => (i.id === id ? { ...i, plegadoActivo: !i.plegadoActivo } : i))
-    );
-  }
   function handleDxfUpload(id, file) {
     if (!file) return;
     const reader = new FileReader();
@@ -1912,16 +1907,18 @@ export default function App() {
         <div style={{ ...st.panel, flex: "1 1 360px", minWidth: "min(320px, 100%)" }}>
           <div style={{ ...st.eyebrow, marginBottom: 10 }}>{activeItem.nombre} · Proceso</div>
 
-          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-            <button style={btnStyle({ active: true, variant: "primary" })}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+            <button
+              onClick={() => updateItem(activeItem.id, { plegadoActivo: false })}
+              style={btnStyle({ active: !activeItem.plegadoActivo, variant: "primary" })}
+            >
               <Scissors size={14} /> Corte láser
             </button>
             <button
-              disabled
-              title="Próximamente"
-              style={btnStyle({ variant: "disabled" })}
+              onClick={() => updateItem(activeItem.id, { plegadoActivo: true })}
+              style={btnStyle({ active: activeItem.plegadoActivo, variant: "primary" })}
             >
-              Corte plasma
+              <Layers size={14} /> Corte láser y plegado
             </button>
           </div>
 
@@ -2077,14 +2074,6 @@ export default function App() {
               </div>
             </>
           )}
-
-          <button
-            onClick={() => togglePlegado(activeItem.id)}
-            style={btnStyle({ active: activeItem.plegadoActivo, variant: "accent" })}
-          >
-            <Layers size={14} />
-            {activeItem.plegadoActivo ? "Quitar plegado" : "+ Agregar plegado a este ítem"}
-          </button>
 
           {/* editor de tramos de plegado */}
           {activeItem.plegadoActivo && (
