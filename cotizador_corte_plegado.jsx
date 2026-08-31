@@ -119,8 +119,7 @@ const PRESETS_PLEGADO = {
   ],
 };
 
-// TODO: reemplazar por el número de WhatsApp real de la empresa (con código de país, sin +)
-const NUMERO_WHATSAPP = "5493511234567";
+const NUMERO_WHATSAPP = "5493513115838";
 
 let _segUid = 100;
 const nextSegId = () => _segUid++;
