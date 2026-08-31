@@ -4,6 +4,7 @@ import { Plus, Trash2, MessageCircle, Layers, Scissors, X, FileDown } from "luci
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import logoUrl from "./src/assets/plasmart-logo.png";
+import { parseDxfToShape } from "./dxf-utils.js";
 // Requiere agregar las dependencias al proyecto: npm install jspdf jspdf-autotable
 
 /* =========================================================================
@@ -46,6 +47,33 @@ const ESPESORES_CARBONO = [
   0.7, 0.9, 1.25, 1.6, 2, 2.5, 3.2, 4.7, 6.35, 7.9, 9.5, 12.7, 15.8, 19.1,
   22.22, 25.4, 31.8,
 ];
+
+/* =========================================================================
+   PRECIOS — único lugar que hay que tocar para actualizar tarifas.
+   Todo en pesos argentinos, SIN IVA (el IVA se suma aparte en el total).
+   Cuando OroCommerce/panel de admin exista, esto pasa a leerse de ahí;
+   por ahora es la fuente de verdad a mano.
+   ========================================================================= */
+const IVA_PCT = 21;
+
+// Precio de la chapa (material) por kilo, según tramo de espesor (mm).
+// "hasta" es inclusive y los tramos se evalúan en orden — se usa el
+// primer tramo cuyo límite alcance el espesor del ítem.
+const PRECIOS_CHAPA_POR_ESPESOR = [
+  { hasta: 12.7, precioKgSinIva: 4000 },
+  { hasta: 31.8, precioKgSinIva: 4500 },
+];
+
+// Precio del proceso de corte láser + plegado, por kilo procesado.
+const PRECIO_PROCESO_KG_SIN_IVA = 5000;
+
+function precioChapaPorKg(espesor) {
+  const e = parseFloat(espesor) || 0;
+  const tramo = PRECIOS_CHAPA_POR_ESPESOR.find((t) => e <= t.hasta);
+  return tramo
+    ? tramo.precioKgSinIva
+    : PRECIOS_CHAPA_POR_ESPESOR[PRECIOS_CHAPA_POR_ESPESOR.length - 1].precioKgSinIva;
+}
 
 // Paleta para diferenciar ítems en el dibujo de la chapa compartida
 const PALETA_ITEMS = [
@@ -445,7 +473,53 @@ function dibujarChapaCanvas(sheet, placements, margen, gap, pxW = 340, pxH) {
   return canvas.toDataURL("image/png");
 }
 
+// Arma el atributo "d" de un <path> a partir de los loops leídos del DXF
+// (contorno + agujeros). fill-rule="evenodd" hace que los loops interiores
+// se dibujen como huecos automáticamente, sin importar el orden en que
+// vinieron las entidades en el archivo.
+function dxfPathD(shape) {
+  return shape.loops
+    .map((loop) => "M " + loop.map((p) => `${p.x} ${-p.y}`).join(" L ") + " Z")
+    .join(" ");
+}
+
+function DxfShapeSvg({ shape, size, strokeWidth, dashed = true }) {
+  const w = Math.max(shape.width, 1);
+  const h = Math.max(shape.height, 1);
+  const diag = Math.sqrt(w * w + h * h);
+  const pad = Math.max(diag * 0.14, 4);
+  const viewBox = `${shape.minX - pad} ${-shape.maxY - pad} ${w + 2 * pad} ${h + 2 * pad}`;
+  return (
+    <svg viewBox={viewBox} width={size} height={size} style={{ flexShrink: 0, overflow: "visible" }}>
+      {dashed && (
+        <rect
+          x={shape.minX}
+          y={-shape.maxY}
+          width={w}
+          height={h}
+          fill="none"
+          stroke={TEXT_DIM}
+          strokeWidth={Math.max(diag * 0.01, 0.6)}
+          strokeDasharray={`${Math.max(diag * 0.03, 1.4)} ${Math.max(diag * 0.02, 1)}`}
+        />
+      )}
+      <path
+        d={dxfPathD(shape)}
+        fill={CYAN}
+        fillOpacity={0.18}
+        fillRule="evenodd"
+        stroke={CYAN}
+        strokeWidth={strokeWidth ?? Math.max(diag * 0.018, 1)}
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function ItemThumb({ item, size = 56 }) {
+  if (item.dxfShape) {
+    return <DxfShapeSvg shape={item.dxfShape} size={size} strokeWidth={Math.max(size * 0.02, 1)} />;
+  }
   if (item.plegadoActivo) {
     const g = computeGeometry(item.segments);
     const rounded = computeRoundedPoints(item.segments, g.pts, g.dirs);
@@ -498,6 +572,9 @@ function crearItem(n) {
     cantidad: 10,
     anchoManual: 100,
     largoManual: 100,
+    dxfShape: null,
+    dxfFileName: null,
+    dxfError: null,
     plegadoActivo: false,
     profundidad: 400, // largo de la pieza a lo largo del pliegue (si hay plegado)
     segments: PRESETS_PLEGADO.L.map((s) => ({ ...s, id: nextSegId() })),
@@ -519,9 +596,13 @@ function computeItemMetrics(item) {
   );
   const anchoPieza = item.plegadoActivo
     ? segLenSum
+    : item.dxfShape
+    ? item.dxfShape.width
     : parseFloat(item.anchoManual) || 0;
   const largoPieza = item.plegadoActivo
     ? parseFloat(item.profundidad) || 0
+    : item.dxfShape
+    ? item.dxfShape.height
     : parseFloat(item.largoManual) || 0;
   const espesor = parseFloat(item.espesor) || 0;
   const cantidad = Math.max(0, Math.floor(parseFloat(item.cantidad) || 0));
@@ -573,6 +654,10 @@ function computeItemMetrics(item) {
   const pesoTotalChapasKg = chapasNecesarias * pesoChapaKg;
   const cabe = cantidad === 0 || piezasPorChapa > 0;
 
+  const precioKgSinIva = precioChapaPorKg(espesor) + PRECIO_PROCESO_KG_SIN_IVA;
+  const precioTotalSinIva = pesoTotalKg * precioKgSinIva;
+  const precioTotalConIva = precioTotalSinIva * (1 + IVA_PCT / 100);
+
   return {
     anchoPieza,
     largoPieza,
@@ -595,6 +680,9 @@ function computeItemMetrics(item) {
     pesoChapaKg,
     pesoTotalChapasKg,
     cabe,
+    precioKgSinIva,
+    precioTotalSinIva,
+    precioTotalConIva,
   };
 }
 
@@ -777,6 +865,11 @@ function computeGroupNesting(entries, sheet, margen, gap) {
 const fmt = (n, d = 1) =>
   isFinite(n) ? n.toLocaleString("es-AR", { maximumFractionDigits: d, minimumFractionDigits: 0 }) : "—";
 
+const fmtMoney = (n) =>
+  isFinite(n)
+    ? n.toLocaleString("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 })
+    : "—";
+
 /* =========================================================================
    MENSAJE DE WHATSAPP
    ========================================================================= */
@@ -802,12 +895,7 @@ function buildWhatsAppMessage(items, metricsList, totalChapasGrupos) {
       );
     }
     lines.push(`Cantidad: ${m.cantidad} unidades`);
-    lines.push(
-      `Área total: ${fmt(m.areaTotalM2, 2)} m² · Peso total aprox: ${fmt(
-        m.pesoTotalKg,
-        1
-      )} kg`
-    );
+    lines.push(`Peso total aprox: ${fmt(m.pesoTotalKg, 1)} kg`);
     lines.push("");
   });
   const totalPeso = metricsList.reduce((a, m) => a + m.pesoTotalKg, 0);
@@ -911,6 +999,8 @@ export default function App() {
   const [activeId, setActiveId] = useState(items[0].id);
   const [viewMode, setViewMode] = useState("2d");
   const [chapaViewIndex, setChapaViewIndex] = useState(0);
+  const [pieceModalOpen, setPieceModalOpen] = useState(false);
+  const [pieceModalTab, setPieceModalTab] = useState("manual");
 
   const activeItem = items.find((i) => i.id === activeId) || items[0];
 
@@ -1009,6 +1099,29 @@ export default function App() {
       arr.map((i) => (i.id === id ? { ...i, plegadoActivo: !i.plegadoActivo } : i))
     );
   }
+  function handleDxfUpload(id, file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const shape = parseDxfToShape(String(reader.result));
+        if (!shape) {
+          updateItem(id, { dxfShape: null, dxfFileName: null, dxfError: "No se encontró geometría reconocible en el plano." });
+          return;
+        }
+        updateItem(id, { dxfShape: shape, dxfFileName: file.name, dxfError: null });
+      } catch (err) {
+        updateItem(id, { dxfShape: null, dxfFileName: null, dxfError: "No se pudo leer el archivo DXF." });
+      }
+    };
+    reader.onerror = () => {
+      updateItem(id, { dxfShape: null, dxfFileName: null, dxfError: "No se pudo leer el archivo DXF." });
+    };
+    reader.readAsText(file);
+  }
+  function quitarDxf(id) {
+    updateItem(id, { dxfShape: null, dxfFileName: null, dxfError: null });
+  }
   function updateSegment(itemId, segId, field, value) {
     setItems((arr) =>
       arr.map((i) =>
@@ -1057,7 +1170,8 @@ export default function App() {
   }
 
   const totalPeso = metricsList.reduce((a, x) => a + x.pesoTotalKg, 0);
-  const totalArea = metricsList.reduce((a, x) => a + x.areaTotalM2, 0);
+  const totalPrecioSinIva = metricsList.reduce((a, x) => a + x.precioTotalSinIva, 0);
+  const totalPrecioConIva = metricsList.reduce((a, x) => a + x.precioTotalConIva, 0);
 
   // Total de chapas agrupando por material+espesor (cada grupo comparte chapa,
   // así que no sumamos las chapas de cada ítem por separado).
@@ -1148,7 +1262,7 @@ export default function App() {
     doc.text(`Fecha: ${new Date().toLocaleDateString("es-AR")}`, titleX, y);
     y += 8;
 
-    // Tabla de ítems: medidas, cantidad, área y kilos por pieza
+    // Tabla de ítems: medidas, cantidad, kilos y precio por ítem
     const filas = items.map((it) => {
       const m = metricsList.find((x) => x.id === it.id);
       const mat = MATERIALES.find((mm) => mm.key === it.material)?.label || it.material;
@@ -1159,14 +1273,14 @@ export default function App() {
         `${it.espesor} mm`,
         `${fmt(m.anchoPieza, 0)} × ${fmt(m.largoPieza, 0)} mm`,
         `${m.cantidad}`,
-        `${fmt(m.areaTotalM2, 2)} m²`,
         `${fmt(m.pesoTotalKg, 1)} kg`,
+        fmtMoney(m.precioTotalConIva),
       ];
     });
 
     autoTable(doc, {
       startY: y,
-      head: [["Ítem", "Proceso", "Material", "Espesor", "Medidas", "Cant.", "Área total", "Kilos"]],
+      head: [["Ítem", "Proceso", "Material", "Espesor", "Medidas", "Cant.", "Kilos", "Precio (c/IVA)"]],
       body: filas,
       styles: { fontSize: 8, cellPadding: 2.2 },
       headStyles: { fillColor: [15, 36, 55] },
@@ -1178,8 +1292,22 @@ export default function App() {
     doc.setFontSize(10.5);
     doc.setTextColor(20, 30, 40);
     doc.text(`Peso total: ${fmt(totalPeso, 1)} kg`, marginX, y);
-    doc.text(`Área total: ${fmt(totalArea, 2)} m²`, marginX + 65, y);
-    doc.text(`Chapas estimadas: ${totalChapas}`, marginX + 130, y);
+    doc.text(`Chapas estimadas: ${totalChapas}`, marginX + 65, y);
+    y += 7;
+    doc.text(`Subtotal (sin IVA): ${fmtMoney(totalPrecioSinIva)}`, marginX, y);
+    y += 6;
+    doc.setFontSize(12.5);
+    doc.setTextColor(20, 30, 40);
+    doc.text(`TOTAL (IVA ${IVA_PCT}% incluido): ${fmtMoney(totalPrecioConIva)}`, marginX, y);
+    y += 6;
+    doc.setFontSize(7.5);
+    doc.setTextColor(120, 120, 120);
+    doc.text(
+      "Valores orientativos, sujetos a revisión por un asesor antes de comenzar el trabajo. Precio cotizado por kilo, puede variar según la forma final de la pieza.",
+      marginX,
+      y,
+      { maxWidth: pageW - marginX * 2 }
+    );
     y += 10;
 
     // Por cada grupo de material+espesor: encabezado + miniaturas de cada chapa
@@ -1313,6 +1441,13 @@ export default function App() {
         </div>
       );
     }
+    if (activeItem.dxfShape) {
+      return (
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <DxfShapeSvg shape={activeItem.dxfShape} size={H} dashed strokeWidth={1.6} />
+        </div>
+      );
+    }
     // rectángulo simple
     const ancho = parseFloat(activeItem.anchoManual) || 1;
     const largo = parseFloat(activeItem.largoManual) || 1;
@@ -1440,6 +1575,175 @@ export default function App() {
     );
   }
 
+  /* ---------- ventana modal para definir la pieza (medidas o DXF) + cantidad ---------- */
+  function PiezaModal() {
+    if (!pieceModalOpen) return null;
+    return (
+      <div
+        onClick={() => setPieceModalOpen(false)}
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(5,12,20,0.72)",
+          zIndex: 1000,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 20,
+        }}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            ...st.panel,
+            width: "100%",
+            maxWidth: 480,
+            maxHeight: "90vh",
+            overflowY: "auto",
+            boxSizing: "border-box",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 10 }}>
+            <div style={st.eyebrow}>Definir pieza — {activeItem.nombre}</div>
+            <button
+              onClick={() => setPieceModalOpen(false)}
+              title="Cerrar"
+              style={{ background: "transparent", border: "none", color: TEXT_MUT, cursor: "pointer", padding: 4 }}
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+            <button
+              onClick={() => setPieceModalTab("manual")}
+              style={btnStyle({ active: pieceModalTab === "manual" })}
+            >
+              Medidas manuales
+            </button>
+            <button
+              onClick={() => setPieceModalTab("dxf")}
+              style={btnStyle({ active: pieceModalTab === "dxf" })}
+            >
+              Subir plano (DXF)
+            </button>
+          </div>
+
+          {pieceModalTab === "manual" ? (
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 10, marginBottom: 16 }}>
+              <div>
+                <label style={st.label}>Ancho de pieza (mm)</label>
+                <input
+                  type="number"
+                  style={st.input}
+                  value={activeItem.anchoManual}
+                  onChange={(e) => {
+                    if (activeItem.dxfShape) quitarDxf(activeItem.id);
+                    updateItem(activeItem.id, { anchoManual: e.target.value });
+                  }}
+                />
+              </div>
+              <div>
+                <label style={st.label}>Largo de pieza (mm)</label>
+                <input
+                  type="number"
+                  style={st.input}
+                  value={activeItem.largoManual}
+                  onChange={(e) => {
+                    if (activeItem.dxfShape) quitarDxf(activeItem.id);
+                    updateItem(activeItem.id, { largoManual: e.target.value });
+                  }}
+                />
+              </div>
+              {activeItem.dxfShape && (
+                <div style={{ gridColumn: "1 / -1", fontSize: 10.5, color: TEXT_DIM }}>
+                  Ya hay un plano cargado para este ítem — si tocás las medidas manuales, se
+                  quita el plano y pasa a usarse el rectángulo que cargues acá.
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ marginBottom: 16 }}>
+              {activeItem.dxfShape ? (
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 14,
+                    alignItems: "center",
+                    background: PANEL2,
+                    border: `1px solid ${BORDER}`,
+                    borderRadius: 8,
+                    padding: "12px 14px",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <DxfShapeSvg shape={activeItem.dxfShape} size={84} />
+                  <div style={{ flex: "1 1 140px" }}>
+                    <div style={{ fontSize: 13, color: TEXT, fontWeight: 600 }}>{activeItem.dxfFileName}</div>
+                    <div style={{ fontSize: 12, color: TEXT_MUT, fontFamily: MONO, marginTop: 2 }}>
+                      {fmt(activeItem.dxfShape.width, 1)} × {fmt(activeItem.dxfShape.height, 1)} mm
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => quitarDxf(activeItem.id)}
+                    style={btnStyle({ variant: "danger", small: true })}
+                  >
+                    <X size={13} /> Quitar
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <label
+                    style={{
+                      ...btnStyle({ variant: "primary" }),
+                      display: "inline-flex",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Layers size={14} /> Elegir archivo DXF
+                    <input
+                      type="file"
+                      accept=".dxf"
+                      style={{ display: "none" }}
+                      onChange={(e) => {
+                        handleDxfUpload(activeItem.id, e.target.files?.[0]);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  {activeItem.dxfError && (
+                    <div style={{ fontSize: 10.5, color: RED, marginTop: 8 }}>{activeItem.dxfError}</div>
+                  )}
+                  <div style={{ fontSize: 10.5, color: TEXT_DIM, marginTop: 10 }}>
+                    Leemos líneas, arcos, círculos y curvas del plano para calcular el ancho y
+                    largo reales de la pieza automáticamente — no hace falta cargarlos a mano.
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div style={{ marginBottom: 20 }}>
+            <label style={st.label}>Cantidad de piezas</label>
+            <input
+              type="number"
+              style={{ ...st.input, maxWidth: 140 }}
+              value={activeItem.cantidad}
+              onChange={(e) => updateItem(activeItem.id, { cantidad: e.target.value })}
+            />
+          </div>
+
+          <button
+            onClick={() => setPieceModalOpen(false)}
+            style={{ ...btnStyle({ variant: "primary" }), width: "100%", justifyContent: "center", fontWeight: 600 }}
+          >
+            Listo
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   /* ---------------------------- RENDER ---------------------------- */
   return (
     <div
@@ -1452,6 +1756,7 @@ export default function App() {
         boxSizing: "border-box",
       }}
     >
+      <PiezaModal />
       <div style={st.eyebrow}>Módulo · Cotizador online</div>
       <h1 style={{ fontSize: 21, margin: "4px 0 4px", fontWeight: 600 }}>
         Corte láser y plegado de chapa
@@ -1574,59 +1879,100 @@ export default function App() {
           )}
 
           {!activeItem.plegadoActivo ? (
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 10, marginBottom: 10 }}>
-              <div>
-                <label style={st.label}>Ancho de pieza (mm)</label>
-                <input
-                  type="number"
-                  style={st.input}
-                  value={activeItem.anchoManual}
-                  onChange={(e) => updateItem(activeItem.id, { anchoManual: e.target.value })}
-                />
-              </div>
-              <div>
-                <label style={st.label}>Largo de pieza (mm)</label>
-                <input
-                  type="number"
-                  style={st.input}
-                  value={activeItem.largoManual}
-                  onChange={(e) => updateItem(activeItem.id, { largoManual: e.target.value })}
-                />
+            <div style={{ marginBottom: 14 }}>
+              <label style={st.label}>Pieza y cantidad</label>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 12,
+                  alignItems: "center",
+                  background: PANEL2,
+                  border: `1px solid ${BORDER}`,
+                  borderRadius: 8,
+                  padding: "10px 12px",
+                  flexWrap: "wrap",
+                }}
+              >
+                {activeItem.dxfShape ? (
+                  <DxfShapeSvg shape={activeItem.dxfShape} size={48} />
+                ) : (
+                  <div
+                    style={{
+                      width: 48,
+                      height: 48,
+                      flexShrink: 0,
+                      background: INPUT_BG,
+                      border: `1px solid ${BORDER}`,
+                      borderRadius: 6,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <ItemThumb item={activeItem} size={38} />
+                  </div>
+                )}
+                <div style={{ flex: "1 1 150px" }}>
+                  <div style={{ fontSize: 12.5, color: TEXT, fontWeight: 600 }}>
+                    {activeItem.dxfShape
+                      ? activeItem.dxfFileName
+                      : `${fmt(parseFloat(activeItem.anchoManual) || 0, 0)} × ${fmt(
+                          parseFloat(activeItem.largoManual) || 0,
+                          0
+                        )} mm`}
+                  </div>
+                  <div style={{ fontSize: 11, color: TEXT_MUT, fontFamily: MONO }}>
+                    {activeItem.dxfShape &&
+                      `${fmt(activeItem.dxfShape.width, 1)} × ${fmt(activeItem.dxfShape.height, 1)} mm (auto) · `}
+                    {activeItem.cantidad} piezas
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setPieceModalTab(activeItem.dxfShape ? "dxf" : "manual");
+                    setPieceModalOpen(true);
+                  }}
+                  style={btnStyle({ variant: "primary", small: true })}
+                >
+                  Editar pieza
+                </button>
               </div>
             </div>
           ) : (
-            <div
-              style={{
-                background: PANEL2,
-                border: `1px solid ${BORDER}`,
-                borderRadius: 8,
-                padding: "10px 12px",
-                marginBottom: 10,
-              }}
-            >
-              <label style={st.label}>Longitud de la pieza (mm) — a lo largo del pliegue</label>
-              <input
-                type="number"
-                style={{ ...st.input, maxWidth: 140 }}
-                value={activeItem.profundidad}
-                onChange={(e) => updateItem(activeItem.id, { profundidad: e.target.value })}
-              />
-              <div style={{ fontSize: 10.5, color: TEXT_DIM, marginTop: 6 }}>
-                El ancho de la chapa a cortar se toma automáticamente del desarrollo del
-                perfil plegado ({fmt(m.segLenSum, 0)} mm), definido abajo.
+            <>
+              <div
+                style={{
+                  background: PANEL2,
+                  border: `1px solid ${BORDER}`,
+                  borderRadius: 8,
+                  padding: "10px 12px",
+                  marginBottom: 10,
+                }}
+              >
+                <label style={st.label}>Longitud de la pieza (mm) — a lo largo del pliegue</label>
+                <input
+                  type="number"
+                  style={{ ...st.input, maxWidth: 140 }}
+                  value={activeItem.profundidad}
+                  onChange={(e) => updateItem(activeItem.id, { profundidad: e.target.value })}
+                />
+                <div style={{ fontSize: 10.5, color: TEXT_DIM, marginTop: 6 }}>
+                  El ancho de la chapa a cortar se toma automáticamente del desarrollo del
+                  perfil plegado ({fmt(m.segLenSum, 0)} mm), definido abajo.
+                </div>
               </div>
-            </div>
-          )}
 
-          <div style={{ marginBottom: 14 }}>
-            <label style={st.label}>Cantidad de piezas</label>
-            <input
-              type="number"
-              style={{ ...st.input, maxWidth: 120 }}
-              value={activeItem.cantidad}
-              onChange={(e) => updateItem(activeItem.id, { cantidad: e.target.value })}
-            />
-          </div>
+              <div style={{ marginBottom: 14 }}>
+                <label style={st.label}>Cantidad de piezas</label>
+                <input
+                  type="number"
+                  style={{ ...st.input, maxWidth: 120 }}
+                  value={activeItem.cantidad}
+                  onChange={(e) => updateItem(activeItem.id, { cantidad: e.target.value })}
+                />
+              </div>
+            </>
+          )}
 
           <button
             onClick={() => togglePlegado(activeItem.id)}
@@ -1752,14 +2098,6 @@ export default function App() {
               </div>
             </div>
             <div style={st.metric}>
-              <div style={st.metricK}>Área × pieza</div>
-              <div style={st.metricV}>{fmt(m.areaPiezaM2, 3)} m²</div>
-            </div>
-            <div style={st.metric}>
-              <div style={st.metricK}>Área total ({m.cantidad} u. de este ítem)</div>
-              <div style={{ ...st.metricV, color: CYAN }}>{fmt(m.areaTotalM2, 2)} m²</div>
-            </div>
-            <div style={st.metric}>
               <div style={st.metricK}>Peso total ({m.cantidad} u. de este ítem)</div>
               <div style={{ ...st.metricV, color: ORANGE }}>{fmt(m.pesoTotalKg, 1)} kg</div>
             </div>
@@ -1770,6 +2108,10 @@ export default function App() {
             <div style={st.metric}>
               <div style={st.metricK}>Cantidad</div>
               <div style={st.metricV}>{m.cantidad}</div>
+            </div>
+            <div style={st.metric}>
+              <div style={st.metricK}>Precio este ítem (c/IVA)</div>
+              <div style={{ ...st.metricV, color: CYAN }}>{fmtMoney(m.precioTotalConIva)}</div>
             </div>
           </div>
         </div>
@@ -2011,14 +2353,16 @@ export default function App() {
                 </div>
 
                 <div style={{ textAlign: "right", minWidth: 100 }}>
-                  <div style={st.metricK}>Área total</div>
-                  <div style={{ fontFamily: MONO, fontSize: 15, color: CYAN }}>{fmt(im.areaTotalM2, 2)} m²</div>
-                </div>
-
-                <div style={{ textAlign: "right", minWidth: 100 }}>
                   <div style={st.metricK}>Kilos</div>
                   <div style={{ fontFamily: MONO, fontSize: 15, color: ORANGE, fontWeight: 600 }}>
                     {fmt(im.pesoTotalKg, 1)} kg
+                  </div>
+                </div>
+
+                <div style={{ textAlign: "right", minWidth: 110 }}>
+                  <div style={st.metricK}>Precio (c/IVA)</div>
+                  <div style={{ fontFamily: MONO, fontSize: 15, color: CYAN, fontWeight: 600 }}>
+                    {fmtMoney(im.precioTotalConIva)}
                   </div>
                 </div>
 
@@ -2129,16 +2473,20 @@ export default function App() {
           }}
         >
           <div style={st.metric}>
-            <div style={st.metricK}>Área total</div>
-            <div style={{ ...st.metricV, color: CYAN }}>{fmt(totalArea, 2)} m²</div>
-          </div>
-          <div style={st.metric}>
             <div style={st.metricK}>Peso total</div>
             <div style={{ ...st.metricV, color: ORANGE }}>{fmt(totalPeso, 1)} kg</div>
           </div>
           <div style={st.metric}>
             <div style={st.metricK}>Chapas estimadas</div>
             <div style={st.metricV}>{totalChapas}</div>
+          </div>
+          <div style={st.metric}>
+            <div style={st.metricK}>Subtotal (sin IVA)</div>
+            <div style={st.metricV}>{fmtMoney(totalPrecioSinIva)}</div>
+          </div>
+          <div style={st.metric}>
+            <div style={st.metricK}>Total (con IVA {IVA_PCT}%)</div>
+            <div style={{ ...st.metricV, color: CYAN }}>{fmtMoney(totalPrecioConIva)}</div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
