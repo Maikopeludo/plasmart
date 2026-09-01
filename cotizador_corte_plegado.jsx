@@ -756,17 +756,18 @@ function computeItemMetrics(item) {
 
 /* =========================================================================
    NESTING COMBINADO — varios ítems del mismo material + espesor comparten
-   chapa. Modelo de "estantes" (filas): la chapa se llena con filas
-   horizontales que se apilan una debajo de la otra sin dejar saltos. En
-   cada paso se evalúan dos opciones —reusar el ancho sobrante de una fila
-   ya abierta (para que piezas chicas puedan aprovechar ese lugar) o abrir
-   una fila nueva justo debajo de las anteriores— y se elige la que más
-   área ocupa, sin importar el orden en que se cargaron los ítems. Como
-   toda fila nueva se apila debajo de la anterior, no pueden quedar huecos
-   flotando en el medio de la chapa: lo que sobra siempre queda abajo,
-   listo para pasar a la chapa siguiente. Es una heurística para calcular
-   área/cantidad de chapas de forma aproximada y rápida —pensada para
-   presupuestar—, no un optimizador de nesting de producción.
+   chapa. Usa "MaxRects" (el algoritmo estándar de bin-packing rectangular,
+   el mismo tipo de técnica que usan los empaquetadores de sprites/corte):
+   en vez de apilar filas fijas, la chapa se representa como una lista de
+   rectángulos libres que se van partiendo cada vez que se coloca algo. En
+   cada paso se evalúa, entre TODOS los rectángulos libres y TODOS los
+   ítems pendientes (en sus dos orientaciones), cuál combinación aprovecha
+   más área, sin importar el orden en que se cargaron los ítems. Así se
+   pueden reaprovechar huecos que quedan al costado o debajo de piezas ya
+   ubicadas, en vez de perderlos como pasaba con el modelo de filas. Sigue
+   siendo una heurística (el nesting rectangular óptimo es NP-difícil),
+   pero da un resultado mucho más ajustado — pensada para presupuestar, no
+   como trayectoria final de corte de producción.
    ========================================================================= */
 function computeGroupNesting(entries, sheet, margen, gap) {
   const usableL = Math.max(0, sheet.largo - 2 * margen);
@@ -786,127 +787,126 @@ function computeGroupNesting(entries, sheet, margen, gap) {
     }
   });
 
-  function chapaNueva() {
-    return { shelves: [], altoUsado: 0, placements: [] };
+  // Calcula cuántas piezas entran en el rectángulo libre y, si el pedido
+  // (restante) no alcanza a llenar toda la grilla, arma solo con filas
+  // completas (o una única fila parcial si ni una fila completa entra) —
+  // así el rectángulo que se reserva es exactamente el que se usa, y lo
+  // que sobra queda libre de verdad para que otro ítem lo aproveche en
+  // vez de perderse "reservado" sin piezas adentro.
+  function fitCount(freeRect, pw, ph, restante) {
+    if (pw <= 0 || ph <= 0 || pw > freeRect.w + 0.01 || ph > freeRect.h + 0.01) return null;
+    const nx = Math.max(1, Math.floor((freeRect.w + gap) / (pw + gap)));
+    const ny = Math.max(1, Math.floor((freeRect.h + gap) / (ph + gap)));
+    const filasCompletas = Math.min(ny, Math.floor(restante / nx));
+    if (filasCompletas >= 1) {
+      return {
+        nx,
+        ny: filasCompletas,
+        count: nx * filasCompletas,
+        w: nx * pw + (nx - 1) * gap,
+        h: filasCompletas * ph + (filasCompletas - 1) * gap,
+      };
+    }
+    // no alcanza ni para una fila completa: una sola fila parcial
+    const count = Math.min(restante, nx);
+    if (count <= 0) return null;
+    return { nx: count, ny: 1, count, w: count * pw + (count - 1) * gap, h: ph };
+  }
+
+  // Divide un rectángulo libre en lo que sobra alrededor de lo recién
+  // colocado (hasta 4 pedazos: izquierda/derecha/arriba/abajo).
+  function splitFreeRect(freeRect, placed) {
+    const ix = Math.max(freeRect.x, placed.x);
+    const iy = Math.max(freeRect.y, placed.y);
+    const iw = Math.min(freeRect.x + freeRect.w, placed.x + placed.w) - ix;
+    const ih = Math.min(freeRect.y + freeRect.h, placed.y + placed.h) - iy;
+    if (iw <= 1e-6 || ih <= 1e-6) return [freeRect]; // no se solapan, queda igual
+
+    const out = [];
+    if (placed.x > freeRect.x) out.push({ x: freeRect.x, y: freeRect.y, w: placed.x - freeRect.x, h: freeRect.h });
+    if (placed.x + placed.w < freeRect.x + freeRect.w)
+      out.push({
+        x: placed.x + placed.w,
+        y: freeRect.y,
+        w: freeRect.x + freeRect.w - (placed.x + placed.w),
+        h: freeRect.h,
+      });
+    if (placed.y > freeRect.y) out.push({ x: freeRect.x, y: freeRect.y, w: freeRect.w, h: placed.y - freeRect.y });
+    if (placed.y + placed.h < freeRect.y + freeRect.h)
+      out.push({
+        x: freeRect.x,
+        y: placed.y + placed.h,
+        w: freeRect.w,
+        h: freeRect.y + freeRect.h - (placed.y + placed.h),
+      });
+    return out.filter((r) => r.w > 0.5 && r.h > 0.5);
+  }
+
+  const contenido = (a, b) => a.x >= b.x - 0.01 && a.y >= b.y - 0.01 && a.x + a.w <= b.x + b.w + 0.01 && a.y + a.h <= b.y + b.h + 0.01;
+
+  function podarLibres(lista) {
+    const out = [];
+    for (let i = 0; i < lista.length; i++) {
+      let redundante = false;
+      for (let j = 0; j < lista.length; j++) {
+        if (i === j) continue;
+        if (contenido(lista[i], lista[j]) && (i > j || !contenido(lista[j], lista[i]))) {
+          redundante = true;
+          break;
+        }
+      }
+      if (!redundante) out.push(lista[i]);
+    }
+    return out;
+  }
+
+  function nuevaChapa() {
+    return { freeRects: [{ x: 0, y: 0, w: usableL, h: usableW }], placements: [] };
   }
   const chapas = [];
-  const hayPendientes = () => pendientes.some((e) => e.restante > 0);
 
   let guardaGlobal = 0;
-  while (hayPendientes() && guardaGlobal < 3000) {
+  while (pendientes.some((e) => e.restante > 0) && guardaGlobal < 500) {
     guardaGlobal++;
-    const chapaActual = chapaNueva();
+    const chapaActual = nuevaChapa();
     chapas.push(chapaActual);
 
     let guardaChapa = 0;
-    while (guardaChapa < 3000) {
+    while (guardaChapa < 4000) {
       guardaChapa++;
       let mejor = null;
 
-      // A) reusar el ancho sobrante de filas ya abiertas en esta chapa
-      chapaActual.shelves.forEach((s) => {
-        const anchoLibre = usableL - s.xUsed;
-        if (anchoLibre <= 0) return;
+      chapaActual.freeRects.forEach((freeRect, frIdx) => {
         pendientes.forEach((e) => {
           if (e.restante <= 0) return;
           [
             { pw: e.ancho, ph: e.largo },
             { pw: e.largo, ph: e.ancho },
           ].forEach((orient) => {
-            const { pw, ph } = orient;
-            if (pw <= 0 || ph <= 0 || ph > s.height + 0.01) return;
-            const nx = Math.floor((anchoLibre + gap) / (pw + gap));
-            if (nx <= 0) return;
-            const count = Math.min(e.restante, nx);
-            if (count <= 0) return;
-            const areaUsada = count * pw * ph;
+            const fit = fitCount(freeRect, orient.pw, orient.ph, e.restante);
+            if (!fit) return;
+            const areaUsada = fit.count * orient.pw * orient.ph;
             if (!mejor || areaUsada > mejor.areaUsada) {
-              mejor = { tipo: "existente", shelf: s, e, pw, ph, count, areaUsada };
+              mejor = { frIdx, e, pw: orient.pw, ph: orient.ph, fit, areaUsada };
             }
           });
         });
       });
-
-      // B) abrir una fila nueva justo debajo de las anteriores
-      const altoLibre = usableW - chapaActual.altoUsado;
-      if (altoLibre > 0) {
-        pendientes.forEach((e) => {
-          if (e.restante <= 0) return;
-          [
-            { pw: e.ancho, ph: e.largo },
-            { pw: e.largo, ph: e.ancho },
-          ].forEach((orient) => {
-            const { pw, ph } = orient;
-            if (pw <= 0 || ph <= 0 || ph > altoLibre + 0.01) return;
-            const nx = Math.floor((usableL + gap) / (pw + gap));
-            if (nx <= 0) return;
-            const count = Math.min(e.restante, nx);
-            if (count <= 0) return;
-            const areaUsada = count * pw * ph;
-            if (!mejor || areaUsada > mejor.areaUsada) {
-              mejor = { tipo: "nueva", pw, ph, e, count, areaUsada };
-            }
-          });
-        });
-      }
 
       if (!mejor) break; // no entra nada más en esta chapa -> pasar a la siguiente
 
-      if (mejor.tipo === "existente") {
-        const { shelf, e, pw, ph, count } = mejor;
-        chapaActual.placements.push({
-          itemId: e.itemId,
-          color: e.color,
-          x: shelf.xUsed,
-          y: shelf.y,
-          nx: count,
-          ny: 1,
-          pw,
-          ph,
-          count,
-          _shelf: shelf,
-        });
-        shelf.xUsed += count * pw + count * gap;
-        e.restante -= count;
-      } else {
-        const { pw, ph, e, count } = mejor;
-        const nuevaFila = { y: chapaActual.altoUsado, height: ph, xUsed: count * pw + count * gap };
-        chapaActual.shelves.push(nuevaFila);
-        chapaActual.placements.push({
-          itemId: e.itemId,
-          color: e.color,
-          x: 0,
-          y: nuevaFila.y,
-          nx: count,
-          ny: 1,
-          pw,
-          ph,
-          count,
-          _shelf: nuevaFila,
-        });
-        chapaActual.altoUsado += ph + gap;
-        e.restante -= count;
-      }
+      const { frIdx, e, pw, ph, fit } = mejor;
+      const { nx, ny, count, w, h } = fit;
+      const freeRect = chapaActual.freeRects[frIdx];
+      const placedRect = { x: freeRect.x, y: freeRect.y, w, h };
+      chapaActual.placements.push({ itemId: e.itemId, color: e.color, x: freeRect.x, y: freeRect.y, nx, ny, pw, ph, count });
+
+      const siguientesLibres = [];
+      chapaActual.freeRects.forEach((fr) => siguientesLibres.push(...splitFreeRect(fr, placedRect)));
+      chapaActual.freeRects = podarLibres(siguientesLibres);
+      e.restante -= count;
     }
-
-    // Compactación: subimos cada fila para que quede pegada a la
-    // anterior, usando la altura REAL ocupada (la pieza más alta que
-    // realmente se colocó ahí) en vez de la altura nominal reservada.
-    // Cierra cualquier hueco vertical que haya podido quedar entre filas.
-    const shelvesOrdenadas = [...chapaActual.shelves].sort((a, b) => a.y - b.y);
-    let cursorY = 0;
-    shelvesOrdenadas.forEach((s) => {
-      const piezasFila = chapaActual.placements.filter((p) => p._shelf === s);
-      const alturaReal = piezasFila.reduce((m, p) => Math.max(m, p.ph), 0) || s.height;
-      const delta = cursorY - s.y;
-      piezasFila.forEach((p) => {
-        p.y += delta;
-      });
-      cursorY += alturaReal + gap;
-    });
   }
-
-  chapas.forEach((c) => c.placements.forEach((p) => delete p._shelf));
 
   pendientes.forEach((e) => {
     if (e.restante > 0) noEntra.add(e.itemId);
